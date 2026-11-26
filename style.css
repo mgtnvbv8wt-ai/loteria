@@ -67,7 +67,7 @@ button { cursor: pointer; }
     var(--paper);
 }
 .decimo.t-Sábado { --c: 22, 85, 60; --accent: #16553c; }
-.decimo.t-Navidad { --c: 200, 40, 30; --accent: #c0291d; }
+.decimo.t-Navidad { --c: 130, 20, 22; --accent: #821416; }
 .decimo.t-Niño { --c: 25, 80, 140; --accent: #1b4f8f; }
 .decimo.t-Otro { --c: 90, 70, 20; --accent: #5a4614; }
 .decimo.t-Jueves { --c: 130, 20, 22; --accent: #821416; }

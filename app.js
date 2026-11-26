@@ -1,6 +1,7 @@
 'use strict';
 const app = document.getElementById('app');
-const eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' });
+const eurInt = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0, useGrouping: 'always' });
+const eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', useGrouping: 'always' });
 
 const NAMES = ['Guillem', 'Carla', 'Aleix', 'Oriol'];
 const state = { me: null, tickets: [], draws: {}, filter: 'all', config: { inviteRequired: false } };
@@ -75,10 +76,35 @@ const pad = n => String(n).padStart(2, '0');
 const isoDate = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
 // ---------- premios ----------
+// Premios derivados de los números principales (reglas oficiales del sorteo de Navidad):
+// aproximaciones (anterior/posterior), centenas, terminaciones (2 últimas cifras) y reintegro (última cifra del Gordo).
+// El número del que se derivan centenas, terminaciones y reintegro queda exceptuado de ese premio.
+const pad5 = n => String(n).padStart(5, '0');
+function derivedGroups(results) {
+  const nums = label => ((results.find(r => r.label === label) || { numeros: [] }).numeros).filter(n => n.length === 5);
+  const out = [];
+  const add = (label, euros, fn) => out.push({ label, euros, fn });
+  for (const [lab, short, apr] of [['El Gordo', 'Gordo', 2000], ['2º premio', '2º', 1250], ['3er premio', '3º', 960]]) {
+    for (const g of nums(lab)) {
+      const prev = pad5((Number(g) + 99999) % 100000), next = pad5((Number(g) + 1) % 100000);
+      add('Aprox. ' + short, apr, n => n === prev || n === next);
+      add('Centena ' + short, 100, n => n !== g && n.slice(0, 3) === g.slice(0, 3));
+      add('Terminación ' + short, 100, n => n !== g && n.slice(3) === g.slice(3));
+    }
+  }
+  for (const g of nums('4º premio')) add('Centena 4º', 100, n => n !== g && n.slice(0, 3) === g.slice(0, 3));
+  for (const g of nums('El Gordo')) add('Reintegro', 20, n => n !== g && n[4] === g[4]);
+  return out;
+}
 function prizesFor(t) {
   const draw = state.draws[t.sorteo];
   if (!draw) return null;
-  const hits = draw.results.filter(r => t.numero.endsWith(r.numero));
+  const hits = [];
+  for (const r of draw.results) {
+    if (r.label === 'Reintegro') continue;
+    if (r.numeros.some(n => t.numero.endsWith(n))) hits.push({ label: r.label, euros: r.euros });
+  }
+  for (const d of derivedGroups(draw.results)) if (d.fn(t.numero)) hits.push({ label: d.label, euros: d.euros });
   const total = hits.reduce((s, r) => s + r.euros, 0) * t.decimos;
   return { hits, total };
 }
@@ -160,6 +186,7 @@ function renderMain() {
       h('div', { class: 'toolbar' },
         h('button', { class: 'btn gold', onclick: () => ticketDialog() }, '+ Apuntar número'),
         h('button', { class: 'btn ghost', onclick: () => resultsDialog() }, '🏆 Resultados')),
+      personsBlock(list),
       h('div', { class: 'summary' },
         h('div', {}, h('b', {}, list.reduce((s, t) => s + t.decimos, 0)), h('span', {}, 'Décimos')),
         h('div', {}, h('b', {}, eur.format(invested)), h('span', {}, 'Jugado')),
@@ -168,6 +195,31 @@ function renderMain() {
         : h('div', { class: 'empty' }, 'Todavía no hay números apuntados.', h('br'), 'Pulsa «Apuntar número» para empezar.'),
       h('p', { class: 'hint', style: 'text-align:center;margin-top:24px' },
         'Los premios se calculan con los resultados que se introducen a mano. Compruébalos siempre con el resultado oficial de Loterías y Apuestas del Estado.')));
+}
+
+const fmtN = n => n.toLocaleString('es-ES', { maximumFractionDigits: 2 });
+function personsBlock(list) {
+  const per = NAMES.map(n => ({ n, cost: 0, dec: 0, prize: 0 }));
+  const hasDraw = !!state.draws[SORTEO];
+  let sinAsignar = 0;
+  for (const t of list) {
+    const ppl = t.participantes ? t.participantes.split(',').map(x => x.trim()).filter(x => NAMES.includes(x)) : [];
+    if (!ppl.length) { sinAsignar++; continue; }
+    const p = prizesFor(t);
+    for (const n of ppl) {
+      const r = per.find(x => x.n === n);
+      r.cost += t.precio * t.decimos / ppl.length;
+      r.dec += t.decimos / ppl.length;
+      if (p) r.prize += p.total / ppl.length;
+    }
+  }
+  return h('div', {},
+    h('div', { class: 'persons' }, per.map(r => h('div', { class: 'person' + (state.me.persona === r.n ? ' me' : '') },
+      h('b', {}, r.n),
+      h('span', {}, 'Pone ' + eur.format(r.cost)),
+      h('span', {}, fmtN(r.dec) + (r.dec === 1 ? ' décimo' : ' décimos')),
+      hasDraw ? h('span', { class: 'pz' }, 'Le toca ' + eur.format(r.prize)) : null))),
+    sinAsignar ? h('p', { class: 'hint', style: 'margin:-8px 0 14px' }, sinAsignar + (sinAsignar === 1 ? ' número sin participantes asignados' : ' números sin participantes asignados') + ' (no se cuentan arriba).') : null);
 }
 
 function decimo(t) {
@@ -278,34 +330,79 @@ function confirmDelete(t) {
     } }, 'Borrar')]);
 }
 
-function resultsDialog(date = SORTEO) {
-  let rows = (state.draws[date] ? state.draws[date].results : []).map(r => ({ ...r }));
-  const box = h('div', {});
-  const err = h('div', { class: 'err', role: 'alert' });
+// Premios de la Lotería de Navidad 2026, por décimo (importes oficiales)
+const FIJOS = [
+  { label: 'El Gordo', euros: 400000, slots: 1 },
+  { label: '2º premio', euros: 125000, slots: 1 },
+  { label: '3er premio', euros: 50000, slots: 1 },
+  { label: '4º premio', euros: 20000, slots: 2 },
+  { label: '5º premio', euros: 6000, slots: 8 }
+];
+const PEDREA = { label: 'Pedrea', euros: 100 };
+const EXTRAS = [['Otro premio', 0]];
 
-  function draw() {
-    box.replaceChildren(
-      h('div', { class: 'res-head' }, h('span', {}, 'Número'), h('span', {}, 'Premio'), h('span', {}, '€ / décimo'), h('span')),
-      rows.map((r, i) => h('div', { class: 'res-row' },
+function resultsDialog(date = SORTEO) {
+  const saved = state.draws[date] ? state.draws[date].results : [];
+  const known = [...FIJOS.map(f => f.label), PEDREA.label, 'Reintegro'];
+  const vals = FIJOS.map(f => { const g = saved.find(r => r.label === f.label); return Array.from({ length: f.slots }, (_, i) => (g && g.numeros[i]) || ''); });
+  const ped = saved.find(r => r.label === PEDREA.label);
+  const extras = [];
+  for (const r of saved) if (!known.includes(r.label)) for (const n of r.numeros) extras.push({ numero: n, label: r.label, euros: r.euros });
+  const err = h('div', { class: 'err', role: 'alert' });
+  const extraBox = h('div', {});
+
+  const fixedRows = FIJOS.map((f, fi) => h('div', { class: 'fx' },
+    h('div', { class: 'fx-h' }, h('b', {}, f.label), h('span', {}, eurInt.format(f.euros) + ' / décimo')),
+    h('div', { class: 'fx-in' }, vals[fi].map((v, si) => h('input', {
+      class: 'fx-n', inputmode: 'numeric', maxlength: f.digits || 5, placeholder: f.digits === 1 ? '0' : '00000', value: v, 'aria-label': f.label + (f.slots > 1 ? ' ' + (si + 1) : ''),
+      oninput: e => { vals[fi][si] = e.target.value.replace(/\D/g, '').slice(0, f.digits || 5); e.target.value = vals[fi][si]; } })))));
+
+  const pedCount = h('span', { class: 'hint' });
+  const pedTa = h('textarea', { rows: 3, placeholder: 'Pega aquí los números de la pedrea (separados por espacios, comas o líneas)', 'aria-label': 'Números de la pedrea',
+    oninput: () => { const n = new Set((pedTa.value.match(/\d+/g) || []).filter(x => x.length === 5)).size; pedCount.textContent = n + ' números'; } });
+  pedTa.value = ped ? ped.numeros.join(' ') : '';
+  pedCount.textContent = ped ? ped.numeros.length + ' números' : '0 números';
+
+  function drawExtras() {
+    extraBox.replaceChildren(...[
+      extras.length ? h('div', { class: 'res-head' }, h('span', {}, 'Número'), h('span', {}, 'Premio'), h('span', {}, '€ / décimo'), h('span')) : null,
+      extras.map((r, i) => h('div', { class: 'res-row' },
         h('input', { inputmode: 'numeric', maxlength: 5, value: r.numero, 'aria-label': 'Número premiado', oninput: e => { r.numero = e.target.value.replace(/\D/g, '').slice(0, 5); e.target.value = r.numero; } }),
         h('input', { maxlength: 40, value: r.label, 'aria-label': 'Nombre del premio', oninput: e => { r.label = e.target.value; } }),
         h('input', { type: 'number', min: 0, step: '0.01', value: r.euros, 'aria-label': 'Euros por décimo', oninput: e => { r.euros = e.target.value; } }),
-        h('button', { class: 'x', type: 'button', 'aria-label': 'Quitar', onclick: () => { rows.splice(i, 1); draw(); } }, '✕'))),
-      h('div', { class: 'chips' },
-        ['El Gordo', '2º premio', '3er premio', '4º premio', '5º premio', 'Terminación', 'Reintegro', 'Otro'].map(l =>
-          h('button', { class: 'chip', type: 'button', onclick: () => { rows.push({ numero: '', label: l === 'Otro' ? '' : l, euros: '' }); draw(); } }, '+ ' + l))),
-      h('p', { class: 'hint' }, 'Un número de 5 cifras premia solo a ese número. Con menos cifras (reintegro = 1, terminaciones = 2-4) premia a todos los que acaben así.'));
+        h('button', { class: 'x', type: 'button', 'aria-label': 'Quitar', onclick: () => { extras.splice(i, 1); drawExtras(); } }, '✕'))),
+      h('div', { class: 'chips' }, EXTRAS.map(([l, e]) =>
+        h('button', { class: 'chip', type: 'button', onclick: () => { extras.push({ numero: '', label: l === 'Otro premio' ? '' : l, euros: e || '' }); drawExtras(); } }, '+ ' + l)))].flat().filter(Boolean));
   }
-  draw();
+  drawExtras();
 
-  openDialog('Resultados del Sorteo de Navidad', [box, err,
+  openDialog('Resultados del Sorteo de Navidad', [
+    h('p', { class: 'hint' }, 'Escribe solo los números premiados: los importes ya están puestos. El reintegro, las aproximaciones, las centenas y las terminaciones se calculan solos a partir de estos números.'),
+    ...fixedRows,
+    h('div', { class: 'fx' }, h('div', { class: 'fx-h' }, h('b', {}, 'Pedrea'), h('span', {}, eurInt.format(PEDREA.euros) + ' / décimo')), pedTa, pedCount),
+    h('div', { class: 'fx' }, h('div', { class: 'fx-h' }, h('b', {}, 'Otros premios'), h('span', {}, 'solo si hace falta')), extraBox),
+    err,
     h('p', { class: 'hint' }, 'Los resultados se comparten con todos los usuarios.')],
     close => [
       h('button', { class: 'btn ghost', type: 'button', onclick: close }, 'Cancelar'),
       h('button', { class: 'btn gold', type: 'button', onclick: async () => {
         err.textContent = '';
+        const results = [];
+        for (let fi = 0; fi < FIJOS.length; fi++) {
+          const f = FIJOS[fi]; const need = f.digits || 5;
+          const nums = vals[fi].filter(Boolean);
+          if (nums.some(n => n.length !== need)) { err.textContent = f.label + ': el número debe tener ' + (need === 1 ? '1 cifra' : '5 cifras'); return; }
+          if (nums.length) results.push({ label: f.label, euros: f.euros, numeros: [...new Set(nums)] });
+        }
+        const toks = pedTa.value.match(/\d+/g) || [];
+        const bad = toks.filter(x => x.length !== 5).length;
+        if (bad) { err.textContent = 'Pedrea: ' + bad + (bad === 1 ? ' valor no tiene' : ' valores no tienen') + ' 5 cifras'; return; }
+        if (toks.length) results.push({ label: PEDREA.label, euros: PEDREA.euros, numeros: [...new Set(toks)] });
+        for (const r of extras) {
+          if (r.numero === '') continue;
+          results.push({ label: (r.label || 'Premio').trim(), euros: Number(r.euros) || 0, numeros: [r.numero] });
+        }
         try {
-          const results = rows.filter(r => r.numero !== '' || r.euros !== '' || r.label).map(r => ({ numero: r.numero, label: r.label, euros: Number(r.euros) || 0 }));
           state.draws = (await api('PUT', '/api/draws/' + date, { results })).draws;
           close(); renderMain(); toast('Resultados guardados');
         } catch (x) { err.textContent = x.message; }

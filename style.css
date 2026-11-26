@@ -186,3 +186,9 @@ dialog[open] { display: flex; flex-direction: column; }
 .dlg-head, .dlg-foot { flex: none; }
 .dlg-body { flex: 1 1 auto; min-height: 0; max-height: none; overflow: auto; }
 .dlg-foot .btn { flex: 1 1 auto; }
+
+.cuentas { background: var(--paper); border: 1px solid #cdbf93; border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; font-size: .9rem; }
+.cuentas-h { font-family: var(--serif); font-weight: 700; color: var(--green); margin-bottom: 6px; }
+.debt { padding: 4px 0; }
+.debt.me { background: rgba(231,195,90,.28); border-radius: 6px; padding: 4px 6px; margin: 2px -6px; }
+.debt .amt { color: #8a6a00; }

@@ -187,6 +187,7 @@ function renderMain() {
         h('button', { class: 'btn gold', onclick: () => ticketDialog() }, '+ Apuntar número'),
         h('button', { class: 'btn ghost', onclick: () => resultsDialog() }, '🏆 Resultados')),
       personsBlock(list),
+      cuentasBlock(list),
       h('div', { class: 'summary' },
         h('div', {}, h('b', {}, list.reduce((s, t) => s + t.decimos, 0)), h('span', {}, 'Décimos')),
         h('div', {}, h('b', {}, eur.format(invested)), h('span', {}, 'Jugado')),
@@ -222,6 +223,41 @@ function personsBlock(list) {
     sinAsignar ? h('p', { class: 'hint', style: 'margin:-8px 0 14px' }, sinAsignar + (sinAsignar === 1 ? ' número sin participantes asignados' : ' números sin participantes asignados') + ' (no se cuentan arriba).') : null);
 }
 
+function cuentasBlock(list) {
+  const net = Object.fromEntries(NAMES.map(n => [n, 0]));
+  let sinPagador = 0, hay = false;
+  for (const t of list) {
+    const ppl = t.participantes ? t.participantes.split(',').map(x => x.trim()).filter(x => NAMES.includes(x)) : [];
+    if (!ppl.length) continue;
+    if (!t.pagadoPor) { sinPagador++; continue; }
+    const cost = t.precio * t.decimos;
+    hay = true;
+    net[t.pagadoPor] += cost;
+    for (const n of ppl) net[n] -= cost / ppl.length;
+  }
+  const deb = NAMES.filter(n => net[n] < -0.005).map(n => ({ n, v: -net[n] })).sort((a, b) => b.v - a.v);
+  const acr = NAMES.filter(n => net[n] > 0.005).map(n => ({ n, v: net[n] })).sort((a, b) => b.v - a.v);
+  const pays = [];
+  let i = 0, j = 0;
+  while (i < deb.length && j < acr.length) {
+    const x = Math.min(deb[i].v, acr[j].v);
+    if (x > 0.005) pays.push({ de: deb[i].n, a: acr[j].n, v: x });
+    deb[i].v -= x; acr[j].v -= x;
+    if (deb[i].v < 0.005) i++;
+    if (acr[j].v < 0.005) j++;
+  }
+  const me = state.me.persona;
+  let body;
+  if (!hay) body = h('p', { class: 'hint', style: 'margin:0' }, 'Indica quién ha pagado cada décimo (al editarlo) para ver aquí quién debe dinero.');
+  else if (!pays.length) body = h('p', { style: 'margin:0' }, '✅ Todo en orden: nadie debe dinero a nadie.');
+  else body = h('div', {}, pays.map(p => h('div', { class: 'debt' + (p.de === me || p.a === me ? ' me' : '') },
+    h('b', {}, p.de), ' debe ', h('b', { class: 'amt' }, eur.format(Math.round(p.v * 100) / 100)), ' a ', h('b', {}, p.a))));
+  return h('div', { class: 'cuentas' },
+    h('div', { class: 'cuentas-h' }, '💶 Cuentas'),
+    body,
+    sinPagador ? h('p', { class: 'hint', style: 'margin:6px 0 0' }, sinPagador + (sinPagador === 1 ? ' décimo sin pagador indicado' : ' décimos sin pagador indicado') + ' (no se cuentan).') : null);
+}
+
 function decimo(t) {
   const p = prizesFor(t);
   const won = p && p.hits.length > 0 && p.total > 0;
@@ -240,7 +276,8 @@ function decimo(t) {
       h('div', { class: 'num', 'aria-label': 'Número ' + t.numero }, [...t.numero].map(d => h('span', { class: 'digit' }, d))),
       h('div', { class: 'meta' },
         h('span', {}, h('b', {}, 'Fecha '), fmtDate(t.sorteo)),
-        h('span', {}, h('b', {}, 'Precio '), eur.format(t.precio))),
+        h('span', {}, h('b', {}, 'Precio '), eur.format(t.precio)),
+        h('span', {}, h('b', {}, 'Pagó '), t.pagadoPor || 'sin indicar')),
       people.length ? h('div', { class: 'friends' }, 'Con: ' + people.join(', ')) : null,
       t.notas ? h('div', { class: 'notes' }, t.notas) : null,
       h('div', { style: 'text-align:center;margin-top:8px' }, status),
@@ -268,10 +305,16 @@ function ticketDialog(t) {
       onclick: () => { chosen.has(n) ? chosen.delete(n) : chosen.add(n); b.classList.toggle('on', chosen.has(n)); b.setAttribute('aria-pressed', chosen.has(n)); } }, n);
     return b;
   }));
+  let payer = t ? (t.pagadoPor || '') : (state.me.persona || '');
+  const paybox = h('div', { class: 'chips', style: 'margin-top:2px' }, [...NAMES, ''].map(n => {
+    const b = h('button', { type: 'button', class: 'chip pchip' + (payer === n ? ' on' : ''), onclick: () => { payer = n; for (const c of paybox.children) c.classList.toggle('on', c.dataset.n === payer); } }, n || 'Nadie aún');
+    b.dataset.n = n; return b;
+  }));
   const f = {
     numero: h('input', { class: 'bignum', inputmode: 'numeric', maxlength: 5, pattern: '\\d{5}', placeholder: '00000', required: true, autocomplete: 'off', value: t ? t.numero : '' }),
     decimos: h('input', { type: 'number', min: 1, max: 100, step: 1, required: true, value: t ? t.decimos : 1 }),
     precio: h('input', { type: 'number', min: 0, step: '0.01', required: true, value: t ? t.precio : PRECIO }),
+    pagadoPor: { get value() { return payer; } },
     participantes: { get value() { return NAMES.filter(n => chosen.has(n)).join(', '); } },
     notas: h('textarea', { maxlength: 300, rows: 2, value: t ? t.notas : '' })
   };
@@ -285,6 +328,7 @@ function ticketDialog(t) {
       h('div', {}, h('label', {}, 'Nº décimos'), f.decimos),
       h('div', {}, h('label', {}, 'Precio por décimo (€)'), f.precio)),
     h('label', {}, 'Participantes'), pbox,
+    h('label', {}, '¿Quién ha pagado?'), paybox,
     h('label', {}, 'Notas'), f.notas, err);
 
   const dlg = openDialog(editing ? 'Editar número' : 'Apuntar número', form, close => [

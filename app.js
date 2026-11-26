@@ -2,6 +2,7 @@
 const app = document.getElementById('app');
 const eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' });
 
+const NAMES = ['Guillem', 'Carla', 'Aleix', 'Oriol'];
 const state = { me: null, tickets: [], draws: {}, filter: 'all', config: { inviteRequired: false } };
 const SORTEO = '2026-12-22'; // Sorteo de Navidad (22 de diciembre)
 const PRECIO = 20;           // € por décimo
@@ -49,9 +50,10 @@ async function api(method, url, body) {
   if (url === '/api/login' || url === '/api/register') {
     const d = url === '/api/login'
       ? await rpc('lot_login', { p_username: body.username, p_password: body.password })
-      : await rpc('lot_register', { p_username: body.username, p_password: body.password, p_invite: body.invite || '' });
+      : await rpc('lot_register', { p_username: body.username, p_password: body.password, p_invite: body.invite || '', p_persona: body.persona || '' });
     setToken(d.token); return { user: d.user };
   }
+  if (url === '/api/persona') return rpc('lot_set_persona', { p_token: TOKEN, p_persona: body.persona });
   if (url === '/api/logout') { const t = TOKEN; setToken(''); try { await rpc('lot_logout', { p_token: t }); } catch { /* */ } return { ok: true }; }
   if (url === '/api/tickets' && method === 'POST') return rpc('lot_save_ticket', { p_token: TOKEN, p_id: null, p_ticket: body });
   if ((m = url.match(/^\/api\/tickets\/([\w-]+)$/))) {
@@ -92,6 +94,7 @@ async function boot() {
     state.me = (await api('GET', '/api/me')).user;
     await loadData();
     renderMain();
+    if (!state.me.persona) personaDialog();
   } catch { renderLogin(); }
 }
 
@@ -100,20 +103,27 @@ function renderLogin(mode = 'login') {
   const err = h('div', { class: 'err', role: 'alert' });
   const user = h('input', { id: 'u', autocomplete: 'username', autocapitalize: 'none', required: true, maxlength: 20 });
   const pass = h('input', { id: 'p', type: 'password', autocomplete: mode === 'login' ? 'current-password' : 'new-password', required: true, minlength: 6 });
+  let persona = '';
+  const personaBox = h('div', { class: 'chips', style: 'margin-top:2px' }, (state.config.personas || NAMES.map(name => ({ name, taken: false }))).map(p => {
+    const b = h('button', { type: 'button', class: 'chip pchip', disabled: p.taken, onclick: () => { persona = p.name; for (const c of personaBox.children) c.classList.toggle('on', c.dataset.n === persona); } }, p.name + (p.taken ? ' (ya vinculado)' : ''));
+    b.dataset.n = p.name; return b;
+  }));
   const invite = h('input', { id: 'i', autocomplete: 'off', placeholder: 'Pídeselo a quien creó la app' });
   const form = h('form', {
     onsubmit: async e => {
       e.preventDefault(); err.textContent = '';
       try {
         const body = { username: user.value, password: pass.value };
-        if (mode === 'register') body.invite = invite.value;
+        if (mode === 'register') { if (!persona) { err.textContent = 'Elige quién eres'; return; } body.invite = invite.value; body.persona = persona; }
         state.me = (await api('POST', mode === 'login' ? '/api/login' : '/api/register', body)).user;
         await loadData(); renderMain();
+        if (!state.me.persona) personaDialog();
       } catch (x) { err.textContent = x.message; }
     }
   },
     h('label', { for: 'u' }, 'Usuario'), user,
     h('label', { for: 'p' }, 'Contraseña'), pass,
+    mode === 'register' ? [h('label', {}, '¿Quién eres?'), personaBox] : null,
     mode === 'register' && state.config.inviteRequired ? [h('label', { for: 'i' }, 'Código de invitación'), invite] : null,
     err,
     h('button', { class: 'btn gold', style: 'width:100%;margin-top:10px', type: 'submit' }, mode === 'login' ? 'Entrar' : 'Crear cuenta')
@@ -126,7 +136,7 @@ function renderLogin(mode = 'login') {
         h('p', { class: 'sub' }, 'Apunta · Comparte · Comprueba'),
         h('div', { class: 'tabs' },
           h('button', { type: 'button', class: mode === 'login' ? 'on' : '', onclick: () => renderLogin('login') }, 'Entrar'),
-          h('button', { type: 'button', class: mode === 'register' ? 'on' : '', onclick: () => renderLogin('register') }, 'Registrarse')),
+          h('button', { type: 'button', class: mode === 'register' ? 'on' : '', onclick: async () => { try { state.config = await api('GET', '/api/config'); } catch { /* */ } renderLogin('register'); } }, 'Registrarse')),
         form)))));
   user.focus();
 }
@@ -144,7 +154,7 @@ function renderMain() {
   app.replaceChildren(
     h('div', { class: 'topbar' },
       h('div', { class: 'brand' }, 'Decims i Numeros', h('small', {}, 'Lotería de Mafriges')),
-      h('div', { class: 'who' }, h('span', {}, '👤 ' + state.me.username),
+      h('div', { class: 'who' }, h('span', {}, '👤 ' + (state.me.persona || state.me.username)),
         h('button', { class: 'link', onclick: async () => { await api('POST', '/api/logout', {}); state.me = null; renderLogin(); } }, 'Salir'))),
     h('div', { class: 'wrap' },
       h('div', { class: 'toolbar' },
@@ -200,11 +210,17 @@ function openDialog(title, body, foot) {
 
 function ticketDialog(t) {
   const editing = !!t;
+  const chosen = new Set(t ? t.participantes.split(',').map(x => x.trim()).filter(x => NAMES.includes(x)) : (state.me.persona ? [state.me.persona] : []));
+  const pbox = h('div', { class: 'chips', style: 'margin-top:2px' }, NAMES.map(n => {
+    const b = h('button', { type: 'button', class: 'chip pchip' + (chosen.has(n) ? ' on' : ''), 'aria-pressed': chosen.has(n) ? 'true' : 'false',
+      onclick: () => { chosen.has(n) ? chosen.delete(n) : chosen.add(n); b.classList.toggle('on', chosen.has(n)); b.setAttribute('aria-pressed', chosen.has(n)); } }, n);
+    return b;
+  }));
   const f = {
     numero: h('input', { class: 'bignum', inputmode: 'numeric', maxlength: 5, pattern: '\\d{5}', placeholder: '00000', required: true, autocomplete: 'off', value: t ? t.numero : '' }),
     decimos: h('input', { type: 'number', min: 1, max: 100, step: 1, required: true, value: t ? t.decimos : 1 }),
     precio: h('input', { type: 'number', min: 0, step: '0.01', required: true, value: t ? t.precio : PRECIO }),
-    participantes: h('input', { maxlength: 200, placeholder: 'Ana, Luis, Marta…', value: t ? t.participantes : '' }),
+    participantes: { get value() { return NAMES.filter(n => chosen.has(n)).join(', '); } },
     notas: h('textarea', { maxlength: 300, rows: 2, value: t ? t.notas : '' })
   };
   f.notas.value = t ? t.notas : '';
@@ -216,7 +232,7 @@ function ticketDialog(t) {
     h('div', { class: 'row' },
       h('div', {}, h('label', {}, 'Nº décimos'), f.decimos),
       h('div', {}, h('label', {}, 'Precio por décimo (€)'), f.precio)),
-    h('label', {}, 'Participantes (separados por comas)'), f.participantes,
+    h('label', {}, 'Participantes'), pbox,
     h('label', {}, 'Notas'), f.notas, err);
 
   const dlg = openDialog(editing ? 'Editar número' : 'Apuntar número', form, close => [
@@ -233,6 +249,24 @@ function ticketDialog(t) {
     } catch (x) { err.textContent = x.message; }
   });
   f.numero.focus();
+}
+
+async function personaDialog() {
+  try { state.config = await api('GET', '/api/config'); } catch { /* */ }
+  let sel = '';
+  const err = h('div', { class: 'err', role: 'alert' });
+  const box = h('div', { class: 'chips' }, (state.config.personas || NAMES.map(name => ({ name, taken: false }))).map(p => {
+    const b = h('button', { type: 'button', class: 'chip pchip', disabled: p.taken, onclick: () => { sel = p.name; for (const c of box.children) c.classList.toggle('on', c.dataset.n === sel); } }, p.name + (p.taken ? ' (ya vinculado)' : ''));
+    b.dataset.n = p.name; return b;
+  }));
+  const dlg = openDialog('¿Quién eres?', [h('p', {}, 'Vincula tu usuario a tu nombre. Solo se puede hacer una vez.'), box, err], close => [
+    h('button', { class: 'btn gold', type: 'button', onclick: async () => {
+      err.textContent = '';
+      if (!sel) { err.textContent = 'Elige tu nombre'; return; }
+      try { await api('POST', '/api/persona', { persona: sel }); state.me.persona = sel; close(); renderMain(); toast('Vinculado a ' + sel); }
+      catch (x) { err.textContent = x.message; }
+    } }, 'Guardar')]);
+  dlg.addEventListener('cancel', e => e.preventDefault());
 }
 
 function confirmDelete(t) {

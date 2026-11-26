@@ -192,3 +192,19 @@ dialog[open] { display: flex; flex-direction: column; }
 .debt { padding: 4px 0; }
 .debt.me { background: rgba(231,195,90,.28); border-radius: 6px; padding: 4px 6px; margin: 2px -6px; }
 .debt .amt { color: #8a6a00; }
+
+.gtabs { margin: 0 0 14px; }
+.gname { font-family: var(--serif); font-weight: 700; color: var(--green); margin: 6px 0 8px; font-size: 1.05rem; }
+.gtag { background: var(--green); color: #fff; border-radius: 99px; padding: 1px 9px; font-weight: 600; }
+.sess { border: 1px solid #cdbf93; border-radius: 10px; padding: 10px 12px; margin-top: 12px; background: #fffdf4; }
+.sess-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.sess-h b { font-family: var(--serif); color: var(--green); font-size: 1.1rem; }
+.sess-h span { font-size: .8rem; color: #6b6244; }
+.sess-code { margin: 8px 0; font-size: .85rem; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sess-code code { background: #efe6cc; padding: 3px 8px; border-radius: 6px; font-weight: 700; user-select: all; }
+.sess-add { display: flex; gap: 8px; margin-top: 8px; }
+.sess-add input { min-height: 38px; padding: 6px 10px; }
+.sess-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.sess-actions .btn { flex: 1 1 auto; }
+.chip.static { cursor: default; display: inline-block; }
+.chip.pend { border-style: dashed; opacity: .75; }

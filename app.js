@@ -3,8 +3,10 @@ const app = document.getElementById('app');
 const eurInt = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0, useGrouping: 'always' });
 const eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', useGrouping: 'always' });
 
-const NAMES = ['Guillem', 'Carla', 'Aleix', 'Oriol'];
-const state = { me: null, tickets: [], draws: {}, filter: 'all', config: { inviteRequired: false } };
+const state = { me: null, groups: [], tickets: [], draws: {}, view: 'all' };
+const grp = id => state.groups.find(g => g.id === id);
+const namesOf = g => g.personas.map(p => p.name);
+const partsOf = (t, g) => (t.participantes ? t.participantes.split(',').map(x => x.trim()).filter(x => namesOf(g).includes(x)) : []);
 const SORTEO = '2026-12-22'; // Sorteo de Navidad (22 de diciembre)
 const PRECIO = 20;           // € por décimo
 
@@ -54,7 +56,10 @@ async function api(method, url, body) {
       : await rpc('lot_register', { p_username: body.username, p_password: body.password, p_invite: body.invite || '', p_persona: body.persona || '' });
     setToken(d.token); return { user: d.user };
   }
-  if (url === '/api/persona') return rpc('lot_set_persona', { p_token: TOKEN, p_persona: body.persona });
+  if (url === '/api/group-by-code') return rpc('lot_group_by_code', { p_code: body.code });
+  if (url === '/api/groups') return rpc('lot_create_group', { p_token: TOKEN, p_name: body.name, p_my_persona: body.persona, p_personas: body.others || '' });
+  if (url === '/api/groups/join') return rpc('lot_join_group', { p_token: TOKEN, p_code: body.code, p_persona: body.persona });
+  if (url === '/api/groups/persona') return rpc('lot_add_persona', { p_token: TOKEN, p_group: body.group, p_name: body.name });
   if (url === '/api/logout') { const t = TOKEN; setToken(''); try { await rpc('lot_logout', { p_token: t }); } catch { /* */ } return { ok: true }; }
   if (url === '/api/tickets' && method === 'POST') return rpc('lot_save_ticket', { p_token: TOKEN, p_id: null, p_ticket: body });
   if ((m = url.match(/^\/api\/tickets\/([\w-]+)$/))) {
@@ -112,16 +117,28 @@ function prizesFor(t) {
 // ---------- carga ----------
 async function loadData() {
   const d = await api('GET', '/api/data');
-  state.tickets = d.tickets; state.draws = d.draws;
+  state.groups = d.groups; state.tickets = d.tickets; state.draws = d.draws;
 }
 async function boot() {
-  try { state.config = await api('GET', '/api/config'); } catch { /* */ }
   try {
     state.me = (await api('GET', '/api/me')).user;
     await loadData();
     renderMain();
-    if (!state.me.persona) personaDialog();
   } catch { renderLogin(); }
+}
+
+// Selector de nombre: botones con los nombres libres + campo para escribir uno nuevo
+function nameChooser(personas) {
+  let value = '';
+  const box = h('div', { class: 'chips', style: 'margin-top:2px' });
+  const free = h('input', { placeholder: 'o escribe tu nombre', maxlength: 20, autocomplete: 'off', style: 'margin-top:8px',
+    oninput: () => { value = free.value.trim(); for (const c of box.children) c.classList.remove('on'); } });
+  for (const p of personas) {
+    const b = h('button', { type: 'button', class: 'chip pchip', disabled: p.taken,
+      onclick: () => { value = p.name; free.value = ''; for (const c of box.children) c.classList.toggle('on', c.dataset.n === value); } }, p.name + (p.taken ? ' (ya vinculado)' : ''));
+    b.dataset.n = p.name; box.append(b);
+  }
+  return { el: h('div', {}, box, free), get value() { return value; } };
 }
 
 // ---------- login ----------
@@ -129,28 +146,37 @@ function renderLogin(mode = 'login') {
   const err = h('div', { class: 'err', role: 'alert' });
   const user = h('input', { id: 'u', autocomplete: 'username', autocapitalize: 'none', required: true, maxlength: 20 });
   const pass = h('input', { id: 'p', type: 'password', autocomplete: mode === 'login' ? 'current-password' : 'new-password', required: true, minlength: 6 });
-  let persona = '';
-  const personaBox = h('div', { class: 'chips', style: 'margin-top:2px' }, (state.config.personas || NAMES.map(name => ({ name, taken: false }))).map(p => {
-    const b = h('button', { type: 'button', class: 'chip pchip', disabled: p.taken, onclick: () => { persona = p.name; for (const c of personaBox.children) c.classList.toggle('on', c.dataset.n === persona); } }, p.name + (p.taken ? ' (ya vinculado)' : ''));
-    b.dataset.n = p.name; return b;
-  }));
-  const invite = h('input', { id: 'i', autocomplete: 'off', placeholder: 'Pídeselo a quien creó la app' });
+  let chooser = null;
+  const code = h('input', { id: 'i', autocomplete: 'off', autocapitalize: 'none', placeholder: 'Código que te han pasado' });
+  const codeBox = h('div', {});
+  async function check() {
+    err.textContent = ''; chooser = null; codeBox.replaceChildren();
+    try {
+      const g = await api('POST', '/api/group-by-code', { code: code.value });
+      chooser = nameChooser(g.personas);
+      codeBox.replaceChildren(h('p', { class: 'hint' }, 'Sesión: ', h('b', {}, g.name)), h('label', {}, '¿Quién eres?'), chooser.el);
+    } catch (x) { err.textContent = x.message; }
+  }
   const form = h('form', {
     onsubmit: async e => {
       e.preventDefault(); err.textContent = '';
       try {
         const body = { username: user.value, password: pass.value };
-        if (mode === 'register') { if (!persona) { err.textContent = 'Elige quién eres'; return; } body.invite = invite.value; body.persona = persona; }
+        if (mode === 'register') {
+          if (!chooser) { err.textContent = 'Escribe el código y pulsa «Comprobar código»'; return; }
+          if (!chooser.value) { err.textContent = 'Elige o escribe tu nombre'; return; }
+          body.invite = code.value; body.persona = chooser.value;
+        }
         state.me = (await api('POST', mode === 'login' ? '/api/login' : '/api/register', body)).user;
+        state.view = 'all';
         await loadData(); renderMain();
-        if (!state.me.persona) personaDialog();
       } catch (x) { err.textContent = x.message; }
     }
   },
     h('label', { for: 'u' }, 'Usuario'), user,
     h('label', { for: 'p' }, 'Contraseña'), pass,
-    mode === 'register' ? [h('label', {}, '¿Quién eres?'), personaBox] : null,
-    mode === 'register' && state.config.inviteRequired ? [h('label', { for: 'i' }, 'Código de invitación'), invite] : null,
+    mode === 'register' ? [h('label', { for: 'i' }, 'Código de la sesión'), code,
+      h('button', { class: 'btn small ghost', type: 'button', style: 'margin-top:8px', onclick: check }, 'Comprobar código'), codeBox] : null,
     err,
     h('button', { class: 'btn gold', style: 'width:100%;margin-top:10px', type: 'submit' }, mode === 'login' ? 'Entrar' : 'Crear cuenta')
   );
@@ -162,49 +188,60 @@ function renderLogin(mode = 'login') {
         h('p', { class: 'sub' }, 'Apunta · Comparte · Comprueba'),
         h('div', { class: 'tabs' },
           h('button', { type: 'button', class: mode === 'login' ? 'on' : '', onclick: () => renderLogin('login') }, 'Entrar'),
-          h('button', { type: 'button', class: mode === 'register' ? 'on' : '', onclick: async () => { try { state.config = await api('GET', '/api/config'); } catch { /* */ } renderLogin('register'); } }, 'Registrarse')),
+          h('button', { type: 'button', class: mode === 'register' ? 'on' : '', onclick: () => renderLogin('register') }, 'Registrarse')),
         form)))));
   user.focus();
 }
 
 // ---------- principal ----------
 function renderMain() {
-  const list = state.tickets.slice().sort((a, b) => b.created - a.created);
+  const gs = state.groups;
+  if (state.view !== 'all' && !grp(state.view)) state.view = 'all';
+  const list = state.tickets.filter(t => state.view === 'all' || t.groupId === state.view).sort((a, b) => b.created - a.created);
 
   let invested = 0, won = 0;
   for (const t of list) {
     invested += t.precio * t.decimos;
     const p = prizesFor(t); if (p) won += p.total;
   }
+  const sections = (state.view === 'all' ? gs : [grp(state.view)]).filter(g => list.some(t => t.groupId === g.id));
+  const blocks = sections.map(g => {
+    const gl = list.filter(t => t.groupId === g.id);
+    return h('div', {}, sections.length > 1 ? h('div', { class: 'gname' }, '🗂 ' + g.name) : null, personsBlock(gl, g), cuentasBlock(gl, g));
+  });
+  const tabs = gs.length > 1 ? h('div', { class: 'chips gtabs' }, [['all', 'Todas'], ...gs.map(g => [g.id, g.name])].map(([id, label]) =>
+    h('button', { type: 'button', class: 'chip pchip' + (state.view === id ? ' on' : ''), onclick: () => { state.view = id; renderMain(); } }, label))) : null;
 
   app.replaceChildren(
     h('div', { class: 'topbar' },
       h('div', { class: 'brand' }, 'Decims i Numeros', h('small', {}, 'Lotería de Mafriges')),
-      h('div', { class: 'who' }, h('span', {}, '👤 ' + (state.me.persona || state.me.username)),
-        h('button', { class: 'link', onclick: async () => { await api('POST', '/api/logout', {}); state.me = null; renderLogin(); } }, 'Salir'))),
+      h('div', { class: 'who' }, h('span', {}, '👤 ' + state.me.username),
+        h('button', { class: 'link', onclick: async () => { await api('POST', '/api/logout', {}); state.me = null; state.groups = []; state.tickets = []; renderLogin(); } }, 'Salir'))),
     h('div', { class: 'wrap' },
       h('div', { class: 'toolbar' },
         h('button', { class: 'btn gold', onclick: () => ticketDialog() }, '+ Apuntar número'),
-        h('button', { class: 'btn ghost', onclick: () => resultsDialog() }, '🏆 Resultados')),
-      personsBlock(list),
-      cuentasBlock(list),
-      h('div', { class: 'summary' },
+        h('button', { class: 'btn ghost', onclick: () => resultsDialog() }, '🏆 Resultados'),
+        h('button', { class: 'btn ghost', onclick: () => sesionesDialog() }, '🗂 Sesiones')),
+      tabs,
+      ...blocks,
+      list.length ? h('div', { class: 'summary' },
         h('div', {}, h('b', {}, list.reduce((s, t) => s + t.decimos, 0)), h('span', {}, 'Décimos')),
         h('div', {}, h('b', {}, eur.format(invested)), h('span', {}, 'Jugado')),
-        h('div', { class: 'win' }, h('b', {}, eur.format(won)), h('span', {}, 'Premios'))),
+        h('div', { class: 'win' }, h('b', {}, eur.format(won)), h('span', {}, 'Premios'))) : null,
       list.length ? h('div', { class: 'grid' }, list.map(decimo))
-        : h('div', { class: 'empty' }, 'Todavía no hay números apuntados.', h('br'), 'Pulsa «Apuntar número» para empezar.'),
+        : h('div', { class: 'empty' }, gs.length ? 'Todavía no hay números apuntados.' : 'Todavía no estás en ninguna sesión.',
+            h('br'), gs.length ? 'Pulsa «Apuntar número» para empezar.' : 'Pulsa «Sesiones» para crear una o unirte con un código.'),
       h('p', { class: 'hint', style: 'text-align:center;margin-top:24px' },
         'Los premios se calculan con los resultados que se introducen a mano. Compruébalos siempre con el resultado oficial de Loterías y Apuestas del Estado.')));
 }
 
 const fmtN = n => n.toLocaleString('es-ES', { maximumFractionDigits: 2 });
-function personsBlock(list) {
-  const per = NAMES.map(n => ({ n, cost: 0, dec: 0, prize: 0 }));
+function personsBlock(list, g) {
+  const per = namesOf(g).map(n => ({ n, cost: 0, dec: 0, prize: 0 }));
   const hasDraw = !!state.draws[SORTEO];
   let sinAsignar = 0;
   for (const t of list) {
-    const ppl = t.participantes ? t.participantes.split(',').map(x => x.trim()).filter(x => NAMES.includes(x)) : [];
+    const ppl = partsOf(t, g);
     if (!ppl.length) { sinAsignar++; continue; }
     const p = prizesFor(t);
     for (const n of ppl) {
@@ -215,7 +252,7 @@ function personsBlock(list) {
     }
   }
   return h('div', {},
-    h('div', { class: 'persons' }, per.map(r => h('div', { class: 'person' + (state.me.persona === r.n ? ' me' : '') },
+    h('div', { class: 'persons' }, per.map(r => h('div', { class: 'person' + (g.persona === r.n ? ' me' : '') },
       h('b', {}, r.n),
       h('span', {}, 'Pone ' + eur.format(r.cost)),
       h('span', {}, fmtN(r.dec) + (r.dec === 1 ? ' décimo' : ' décimos')),
@@ -223,11 +260,11 @@ function personsBlock(list) {
     sinAsignar ? h('p', { class: 'hint', style: 'margin:-8px 0 14px' }, sinAsignar + (sinAsignar === 1 ? ' número sin participantes asignados' : ' números sin participantes asignados') + ' (no se cuentan arriba).') : null);
 }
 
-function cuentasBlock(list) {
-  const net = Object.fromEntries(NAMES.map(n => [n, 0]));
+function cuentasBlock(list, g) {
+  const net = Object.fromEntries(namesOf(g).map(n => [n, 0]));
   let sinPagador = 0, hay = false;
   for (const t of list) {
-    const ppl = t.participantes ? t.participantes.split(',').map(x => x.trim()).filter(x => NAMES.includes(x)) : [];
+    const ppl = partsOf(t, g);
     if (!ppl.length) continue;
     if (!t.pagadoPor) { sinPagador++; continue; }
     const cost = t.precio * t.decimos;
@@ -235,8 +272,8 @@ function cuentasBlock(list) {
     net[t.pagadoPor] += cost;
     for (const n of ppl) net[n] -= cost / ppl.length;
   }
-  const deb = NAMES.filter(n => net[n] < -0.005).map(n => ({ n, v: -net[n] })).sort((a, b) => b.v - a.v);
-  const acr = NAMES.filter(n => net[n] > 0.005).map(n => ({ n, v: net[n] })).sort((a, b) => b.v - a.v);
+  const deb = namesOf(g).filter(n => net[n] < -0.005).map(n => ({ n, v: -net[n] })).sort((a, b) => b.v - a.v);
+  const acr = namesOf(g).filter(n => net[n] > 0.005).map(n => ({ n, v: net[n] })).sort((a, b) => b.v - a.v);
   const pays = [];
   let i = 0, j = 0;
   while (i < deb.length && j < acr.length) {
@@ -246,7 +283,7 @@ function cuentasBlock(list) {
     if (deb[i].v < 0.005) i++;
     if (acr[j].v < 0.005) j++;
   }
-  const me = state.me.persona;
+  const me = g.persona;
   let body;
   if (!hay) body = h('p', { class: 'hint', style: 'margin:0' }, 'Indica quién ha pagado cada décimo (al editarlo) para ver aquí quién debe dinero.');
   else if (!pays.length) body = h('p', { style: 'margin:0' }, '✅ Todo en orden: nadie debe dinero a nadie.');
@@ -275,6 +312,7 @@ function decimo(t) {
       h('div', { class: 'dhead' }, h('span', { class: 'logo' }, 'Lotería Nacional'), h('span', { class: 'tipo' }, 'Sorteo de Navidad')),
       h('div', { class: 'num', 'aria-label': 'Número ' + t.numero }, [...t.numero].map(d => h('span', { class: 'digit' }, d))),
       h('div', { class: 'meta' },
+        state.groups.length > 1 && grp(t.groupId) ? h('span', { class: 'gtag' }, '🗂 ' + grp(t.groupId).name) : null,
         h('span', {}, h('b', {}, 'Fecha '), fmtDate(t.sorteo)),
         h('span', {}, h('b', {}, 'Precio '), eur.format(t.precio)),
         h('span', {}, h('b', {}, 'Pagó '), t.pagadoPor || 'sin indicar')),
@@ -298,24 +336,36 @@ function openDialog(title, body, foot) {
 }
 
 function ticketDialog(t) {
+  if (!state.groups.length) { sesionesDialog(); return; }
   const editing = !!t;
-  const chosen = new Set(t ? t.participantes.split(',').map(x => x.trim()).filter(x => NAMES.includes(x)) : (state.me.persona ? [state.me.persona] : []));
-  const pbox = h('div', { class: 'chips', style: 'margin-top:2px' }, NAMES.map(n => {
-    const b = h('button', { type: 'button', class: 'chip pchip' + (chosen.has(n) ? ' on' : ''), 'aria-pressed': chosen.has(n) ? 'true' : 'false',
-      onclick: () => { chosen.has(n) ? chosen.delete(n) : chosen.add(n); b.classList.toggle('on', chosen.has(n)); b.setAttribute('aria-pressed', chosen.has(n)); } }, n);
-    return b;
-  }));
-  let payer = t ? (t.pagadoPor || '') : (state.me.persona || '');
-  const paybox = h('div', { class: 'chips', style: 'margin-top:2px' }, [...NAMES, ''].map(n => {
-    const b = h('button', { type: 'button', class: 'chip pchip' + (payer === n ? ' on' : ''), onclick: () => { payer = n; for (const c of paybox.children) c.classList.toggle('on', c.dataset.n === payer); } }, n || 'Nadie aún');
-    b.dataset.n = n; return b;
-  }));
+  let gid = t ? t.groupId : (state.view !== 'all' ? state.view : state.groups[0].id);
+  let chosen = new Set(), payer = '';
+  const init = g => {
+    const same = t && t.groupId === g.id;
+    chosen = new Set(same ? partsOf(t, g) : (g.persona ? [g.persona] : []));
+    payer = same ? (t.pagadoPor || '') : (g.persona || '');
+  };
+  init(grp(gid));
+  const gbox = h('div', { class: 'chips', style: 'margin-top:2px' });
+  const pbox = h('div', { class: 'chips', style: 'margin-top:2px' });
+  const paybox = h('div', { class: 'chips', style: 'margin-top:2px' });
+  function drawChips() {
+    const g = grp(gid);
+    gbox.replaceChildren(...state.groups.map(x => h('button', { type: 'button', class: 'chip pchip' + (x.id === gid ? ' on' : ''),
+      onclick: () => { if (gid !== x.id) { gid = x.id; init(x); drawChips(); } } }, x.name)));
+    pbox.replaceChildren(...namesOf(g).map(n => h('button', { type: 'button', class: 'chip pchip' + (chosen.has(n) ? ' on' : ''),
+      onclick: e => { chosen.has(n) ? chosen.delete(n) : chosen.add(n); e.currentTarget.classList.toggle('on', chosen.has(n)); } }, n)));
+    paybox.replaceChildren(...[...namesOf(g), ''].map(n => h('button', { type: 'button', class: 'chip pchip' + (payer === n ? ' on' : ''),
+      onclick: () => { payer = n; drawChips(); } }, n || 'Nadie aún')));
+  }
+  drawChips();
   const f = {
     numero: h('input', { class: 'bignum', inputmode: 'numeric', maxlength: 5, pattern: '\\d{5}', placeholder: '00000', required: true, autocomplete: 'off', value: t ? t.numero : '' }),
     decimos: h('input', { type: 'number', min: 1, max: 100, step: 1, required: true, value: t ? t.decimos : 1 }),
     precio: h('input', { type: 'number', min: 0, step: '0.01', required: true, value: t ? t.precio : PRECIO }),
+    groupId: { get value() { return gid; } },
     pagadoPor: { get value() { return payer; } },
-    participantes: { get value() { return NAMES.filter(n => chosen.has(n)).join(', '); } },
+    participantes: { get value() { return namesOf(grp(gid)).filter(n => chosen.has(n)).join(', '); } },
     notas: h('textarea', { maxlength: 300, rows: 2, value: t ? t.notas : '' })
   };
   f.notas.value = t ? t.notas : '';
@@ -323,6 +373,7 @@ function ticketDialog(t) {
   const err = h('div', { class: 'err', role: 'alert' });
 
   const form = h('form', { id: 'tform' },
+    state.groups.length > 1 ? [h('label', {}, 'Sesión'), gbox] : null,
     h('label', {}, 'Número (5 cifras)'), f.numero,
     h('div', { class: 'row' },
       h('div', {}, h('label', {}, 'Nº décimos'), f.decimos),
@@ -347,22 +398,81 @@ function ticketDialog(t) {
   f.numero.focus();
 }
 
-async function personaDialog() {
-  try { state.config = await api('GET', '/api/config'); } catch { /* */ }
-  let sel = '';
+const closeAll = () => document.querySelectorAll('dialog[open]').forEach(d => d.close());
+
+function sesionesDialog() {
+  const body = h('div', {});
+  function draw() {
+    body.replaceChildren(...[
+      ...state.groups.map(g => {
+        const nm = h('input', { placeholder: 'Añadir nombre', maxlength: 20, 'aria-label': 'Nuevo nombre' });
+        const msg = h('div', { class: 'err', role: 'alert' });
+        return h('div', { class: 'sess' },
+          h('div', { class: 'sess-h' }, h('b', {}, g.name), h('span', {}, 'Tú: ' + g.persona)),
+          h('div', { class: 'sess-code' }, 'Código para invitar: ', h('code', {}, g.code),
+            h('button', { class: 'btn small ghost', type: 'button', onclick: async () => {
+              try { await navigator.clipboard.writeText(g.code); toast('Código copiado'); } catch { toast('Copia el código a mano: ' + g.code); }
+            } }, 'Copiar')),
+          h('div', { class: 'chips' }, g.personas.map(p => h('span', { class: 'chip static' + (p.taken ? '' : ' pend') }, p.name + (p.taken ? '' : ' · sin cuenta')))),
+          h('div', { class: 'sess-add' }, nm, h('button', { class: 'btn small ghost', type: 'button', onclick: async () => {
+            msg.textContent = '';
+            try { await api('POST', '/api/groups/persona', { group: g.id, name: nm.value }); await loadData(); renderMain(); draw(); toast('Nombre añadido'); }
+            catch (x) { msg.textContent = x.message; }
+          } }, 'Añadir')), msg);
+      }),
+      state.groups.length ? null : h('p', {}, 'Todavía no estás en ninguna sesión.'),
+      h('div', { class: 'sess-actions' },
+        h('button', { class: 'btn ghost', type: 'button', onclick: joinDialog }, 'Unirme con un código'),
+        h('button', { class: 'btn gold', type: 'button', onclick: createDialog }, '+ Crear sesión')),
+      h('p', { class: 'hint' }, 'Cada sesión tiene sus propios números, nombres y cuentas. Quien no esté en una sesión no ve sus números. Tú ves todas las tuyas a la vez.')].filter(Boolean));
+  }
+  draw();
+  openDialog('Mis sesiones', body, close => [h('button', { class: 'btn ghost', type: 'button', onclick: close }, 'Cerrar')]);
+}
+
+function joinDialog() {
   const err = h('div', { class: 'err', role: 'alert' });
-  const box = h('div', { class: 'chips' }, (state.config.personas || NAMES.map(name => ({ name, taken: false }))).map(p => {
-    const b = h('button', { type: 'button', class: 'chip pchip', disabled: p.taken, onclick: () => { sel = p.name; for (const c of box.children) c.classList.toggle('on', c.dataset.n === sel); } }, p.name + (p.taken ? ' (ya vinculado)' : ''));
-    b.dataset.n = p.name; return b;
-  }));
-  const dlg = openDialog('¿Quién eres?', [h('p', {}, 'Vincula tu usuario a tu nombre. Solo se puede hacer una vez.'), box, err], close => [
+  const code = h('input', { autocomplete: 'off', autocapitalize: 'none', placeholder: 'Código de la sesión' });
+  const box = h('div', {});
+  let chooser = null;
+  async function check() {
+    err.textContent = ''; chooser = null; box.replaceChildren();
+    try {
+      const g = await api('POST', '/api/group-by-code', { code: code.value });
+      chooser = nameChooser(g.personas);
+      box.replaceChildren(h('p', { class: 'hint' }, 'Sesión: ', h('b', {}, g.name)), h('label', {}, '¿Quién eres en esta sesión?'), chooser.el);
+    } catch (x) { err.textContent = x.message; }
+  }
+  openDialog('Unirme a una sesión', [h('label', {}, 'Código de la sesión'), code,
+    h('button', { class: 'btn small ghost', type: 'button', style: 'margin-top:8px', onclick: check }, 'Comprobar código'), box, err], close => [
+    h('button', { class: 'btn ghost', type: 'button', onclick: close }, 'Cancelar'),
     h('button', { class: 'btn gold', type: 'button', onclick: async () => {
       err.textContent = '';
-      if (!sel) { err.textContent = 'Elige tu nombre'; return; }
-      try { await api('POST', '/api/persona', { persona: sel }); state.me.persona = sel; close(); renderMain(); toast('Vinculado a ' + sel); }
-      catch (x) { err.textContent = x.message; }
-    } }, 'Guardar')]);
-  dlg.addEventListener('cancel', e => e.preventDefault());
+      if (!chooser) { err.textContent = 'Escribe el código y pulsa «Comprobar código»'; return; }
+      if (!chooser.value) { err.textContent = 'Elige o escribe tu nombre'; return; }
+      try {
+        const r = await api('POST', '/api/groups/join', { code: code.value, persona: chooser.value });
+        await loadData(); state.view = r.groupId; closeAll(); renderMain(); toast('Te has unido a la sesión');
+      } catch (x) { err.textContent = x.message; }
+    } }, 'Unirme')]);
+}
+
+function createDialog() {
+  const err = h('div', { class: 'err', role: 'alert' });
+  const name = h('input', { maxlength: 40, placeholder: 'Ej.: Silvia y yo', required: true });
+  const me = h('input', { maxlength: 20, placeholder: 'Tu nombre en esta sesión', value: state.groups[0] ? state.groups[0].persona : '' });
+  const others = h('input', { maxlength: 200, placeholder: 'Silvia, Marc… (separados por comas)' });
+  openDialog('Crear sesión', [h('label', {}, 'Nombre de la sesión'), name, h('label', {}, 'Tu nombre'), me,
+    h('label', {}, 'Otros nombres (opcional)'), others,
+    h('p', { class: 'hint' }, 'Al crearla recibirás un código. Quien se registre o se una con ese código entrará solo en esta sesión.'), err], close => [
+    h('button', { class: 'btn ghost', type: 'button', onclick: close }, 'Cancelar'),
+    h('button', { class: 'btn gold', type: 'button', onclick: async () => {
+      err.textContent = '';
+      try {
+        const r = await api('POST', '/api/groups', { name: name.value, persona: me.value, others: others.value });
+        await loadData(); state.view = r.groupId; closeAll(); renderMain(); toast('Sesión creada'); sesionesDialog();
+      } catch (x) { err.textContent = x.message; }
+    } }, 'Crear')]);
 }
 
 function confirmDelete(t) {

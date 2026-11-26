@@ -11,11 +11,21 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Lotería">
-  <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div id="app"></div>
   <div id="toast" role="status" aria-live="polite"></div>
-  <script src="app.js"></script>
+  <script>
+    // Carga siempre la última versión: pregunta la versión sin usar caché y la añade a los archivos
+    (function () {
+      function load(v) {
+        var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'style.css?v=' + v; document.head.appendChild(l);
+        var s = document.createElement('script'); s.src = 'app.js?v=' + v; document.body.appendChild(s);
+      }
+      fetch('version.json?t=' + Date.now(), { cache: 'no-store' })
+        .then(function (r) { return r.json(); }).then(function (j) { load(j.v); })
+        .catch(function () { load('0'); });
+    })();
+  </script>
 </body>
 </html>

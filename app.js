@@ -129,7 +129,7 @@ function renderLogin(mode = 'login') {
   app.replaceChildren(
     h('div', { class: 'login-wrap' }, h('div', { class: 'login' },
       h('div', { class: 'decimo t-Jueves' }, h('div', { style: 'width:100%' },
-        h('div', { class: 'dhead', style: 'justify-content:center' }, h('span', { class: 'logo' }, 'Lotería de amigos')),
+        h('div', { class: 'dhead', style: 'justify-content:center' }, h('span', { class: 'logo' }, 'Lotería de Mafriges')),
         h('h1', {}, 'Nuestros Décimos'),
         h('p', { class: 'sub' }, 'Apunta · Comparte · Comprueba'),
         h('div', { class: 'tabs' },
@@ -159,7 +159,7 @@ function renderMain() {
 
   app.replaceChildren(
     h('div', { class: 'topbar' },
-      h('div', { class: 'brand' }, 'Nuestros Décimos', h('small', {}, 'Lotería de amigos')),
+      h('div', { class: 'brand' }, 'Nuestros Décimos', h('small', {}, 'Lotería de Mafriges')),
       h('div', { class: 'who' }, h('span', {}, '👤 ' + state.me.username),
         h('button', { class: 'link', onclick: async () => { await api('POST', '/api/logout', {}); state.me = null; renderLogin(); } }, 'Salir'))),
     h('div', { class: 'wrap' },

@@ -1,6 +1,6 @@
 :root {
   --ink: #1d2a24;
-  --green: #16553c;
+  --green: #821416;
   --gold: #e7c35a;
   --paper: #fbf4de;
   --bg: #efe6cc;
@@ -12,7 +12,7 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0; color: var(--ink); font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   background:
-    repeating-linear-gradient(45deg, rgba(22,85,60,.04) 0 2px, transparent 2px 14px),
+    repeating-linear-gradient(45deg, rgba(130,20,22,.04) 0 2px, transparent 2px 14px),
     var(--bg);
   min-height: 100vh;
 }
@@ -56,8 +56,8 @@ button { cursor: pointer; }
 /* ---------- décimo ---------- */
 .grid { display: grid; gap: 22px; }
 .decimo {
-  --c: 22, 85, 60;          /* color del sorteo */
-  --accent: #16553c;
+  --c: 130, 20, 22;         /* color del sorteo */
+  --accent: #821416;
   position: relative; display: flex; border-radius: 12px; overflow: hidden;
   border: 3px solid var(--accent);
   box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px rgba(var(--c), .55), 0 8px 18px rgba(0,0,0,.18);
@@ -66,11 +66,11 @@ button { cursor: pointer; }
     repeating-radial-gradient(circle at 85% -30%, transparent 0 5px, rgba(var(--c), .12) 5px 6px),
     var(--paper);
 }
-.decimo.t-Sábado { --c: 150, 40, 40; --accent: #8e2a2a; }
-.decimo.t-Navidad { --c: 160, 30, 30; --accent: #a11d1d; }
+.decimo.t-Sábado { --c: 22, 85, 60; --accent: #16553c; }
+.decimo.t-Navidad { --c: 200, 40, 30; --accent: #c0291d; }
 .decimo.t-Niño { --c: 25, 80, 140; --accent: #1b4f8f; }
 .decimo.t-Otro { --c: 90, 70, 20; --accent: #5a4614; }
-.decimo.t-Jueves { --c: 22, 85, 60; --accent: #16553c; }
+.decimo.t-Jueves { --c: 130, 20, 22; --accent: #821416; }
 
 .stub {
   width: 46px; flex: none; background: var(--accent); color: #fff; display: flex; flex-direction: column;

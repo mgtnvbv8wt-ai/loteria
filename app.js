@@ -67,6 +67,7 @@ async function api(method, url, body) {
   if (url === '/api/groups/regen') return rpc('lot_regen_code', { p_token: TOKEN, p_group: body.group });
   if (url === '/api/groups/me') return rpc('lot_rename_persona', { p_token: TOKEN, p_group: body.group, p_new: body.name });
   if (url === '/api/settlements' && method === 'POST') return rpc('lot_add_settlement', { p_token: TOKEN, p_group: body.group, p_from: body.from, p_to: body.to, p_amount: body.amount });
+  if (url === '/api/draws/oficial') return rpc('lot_save_draw_auto', { p_token: TOKEN, p_date: SORTEO, p_results: body.results });
   if (url === '/api/draws/restore') return rpc('lot_restore_draw', { p_token: TOKEN, p_log_id: body.id });
   if ((m = url.match(/^\/api\/settlements\/([\w-]+)$/)) && method === 'DELETE') return rpc('lot_delete_settlement', { p_token: TOKEN, p_id: m[1] });
   if ((m = url.match(/^\/api\/tickets\/([\w-]+)\/restore$/)) && method === 'POST') return rpc('lot_restore_ticket', { p_token: TOKEN, p_id: m[1] });
@@ -135,6 +136,7 @@ async function boot() {
     state.me = (await api('GET', '/api/me')).user;
     await loadData();
     renderMain();
+    autoOficial();
   } catch { renderLogin(); }
 }
 
@@ -557,6 +559,7 @@ function resultsDialog(date = SORTEO) {
   const extras = [];
   for (const r of saved) if (!known.includes(r.label)) for (const n of r.numeros) extras.push({ numero: n, label: r.label, euros: r.euros });
   const err = h('div', { class: 'err', role: 'alert' });
+  const oficialMsg = h('div', { class: 'hint', style: 'margin-top:6px' });
   const extraBox = h('div', {});
 
   const fixedRows = FIJOS.map((f, fi) => h('div', { class: 'fx' },
@@ -587,6 +590,17 @@ function resultsDialog(date = SORTEO) {
   openDialog('Resultados del Sorteo de Navidad', [
     cur ? h('p', { class: 'hint', style: 'margin-bottom:8px' }, `Última modificación: ${cur.updatedBy}, ${fmtWhen(cur.updated)}. `,
       h('button', { class: 'link', type: 'button', onclick: () => historyDialog() }, 'Ver cambios y restaurar')) : null,
+    h('div', { class: 'oficial' }, h('button', { class: 'btn small gold', type: 'button', onclick: async e => {
+      const b = e.currentTarget; b.disabled = true; oficialMsg.textContent = 'Consultando…';
+      try {
+        const o = await fetchOficial();
+        if (!o.results) { oficialMsg.textContent = o.state === 'curso' ? 'El sorteo está en marcha pero todavía no hay números publicados.' : 'Todavía no hay resultados oficiales publicados.'; return; }
+        const hay = state.draws[date];
+        if (hay && resKey(hay.results) !== resKey(o.results) && !await confirmBox('Cargar resultados oficiales', 'Se sustituirán los resultados guardados por los oficiales. Podrás volver atrás desde el Historial.', 'Cargar', true)) { oficialMsg.textContent = ''; return; }
+        state.draws = (await api('PUT', '/api/draws/oficial', { results: o.results })).draws;
+        closeAll(); renderMain(); toast(o.state === 'listo' ? 'Resultados oficiales cargados' : 'Cargados (el sorteo sigue en marcha)');
+      } catch (x) { oficialMsg.textContent = 'No se han podido consultar: ' + x.message; } finally { b.disabled = false; }
+    } }, '📥 Cargar resultados oficiales'), oficialMsg),
     h('p', { class: 'hint' }, 'Escribe solo los números premiados: los importes ya están puestos. El reintegro, las aproximaciones, las centenas y las terminaciones se calculan solos a partir de estos números.'),
     ...fixedRows,
     h('div', { class: 'fx' }, h('div', { class: 'fx-h' }, h('b', {}, 'Pedrea'), h('span', {}, eurInt.format(PEDREA.euros) + ' / décimo')), pedTa, pedCount),
@@ -765,10 +779,64 @@ function shareDialog() {
     close => [h('button', { class: 'btn ghost', type: 'button', onclick: close }, 'Cerrar')]);
 }
 
+// ---------- resultados oficiales (fuente pública: api-loteria.pabloclementeperez.com, datos de RTVE) ----------
+const OFICIAL = 'https://api-loteria.pabloclementeperez.com/output/';
+const SORTEO_INICIO = new Date('2026-12-22T09:00:00+01:00');
+const AUTO = 'Oficial (auto)';
+const resKey = r => r.map(x => x.label + '|' + Number(x.euros) + '|' + [...x.numeros].sort().join(',')).sort().join(';');
+// Devuelve { state, results? }. state: 'espera' | 'curso' | 'listo' | 'error'
+async function fetchOficial() {
+  const get = async f => { const r = await fetch(OFICIAL + f, { cache: 'no-store' }); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); };
+  const cs = await get('LoteriaNavidadCurrentStatus.json');
+  if (cs.year !== 2026 || !(cs.status >= 1)) return { state: 'espera' };
+  const rs = await get('LoteriaNavidadResumen.json');
+  if (new Date(rs.timestamp * 1000) < SORTEO_INICIO) return { state: 'espera' };
+  const n = i => { const v = rs['numero' + i]; return v == null || v === '' || (Number(v) === 0 && cs.status === 1) ? null : pad5(Number(v)); };
+  const results = [];
+  const slots = [[1, 'El Gordo', 400000], [2, '2º premio', 125000], [3, '3er premio', 50000], [4, '4º premio', 20000], [5, '4º premio', 20000], ...[6, 7, 8, 9, 10, 11, 12, 13].map(i => [i, '5º premio', 6000])];
+  for (const [i, label, euros] of slots) {
+    const v = n(i); if (!v) continue;
+    const ex = results.find(r => r.label === label);
+    if (ex) { if (!ex.numeros.includes(v)) ex.numeros.push(v); } else results.push({ label, euros, numeros: [v] });
+  }
+  if (!results.length) return { state: 'curso' };
+  // Pedrea: números del listado oficial cuyo importe no se explica solo con aproximaciones, centenas, terminaciones y reintegro
+  try {
+    const list = await get('LoteriaNavidad.json');
+    const main = new Set(results.flatMap(r => r.numeros));
+    const dg = derivedGroups(results);
+    const ped = [];
+    for (const [k, v] of Object.entries(list)) {
+      if (k === 'status' || k === 'year') continue;
+      const num = pad5(Number(k));
+      if (main.has(num)) continue;
+      const rest = Number(v) / 10 - dg.reduce((a, d) => a + (d.fn(num) ? d.euros : 0), 0);
+      if (rest >= 99.9) ped.push(num);
+    }
+    if (ped.length) results.push({ label: PEDREA.label, euros: PEDREA.euros, numeros: ped.sort() });
+  } catch { /* sin listado completo aún: se guardan los principales */ }
+  return { state: cs.status >= 2 ? 'listo' : 'curso', results };
+}
+let autoBusy = false, autoLast = 0;
+async function autoOficial() {
+  if (autoBusy || !state.me || Date.now() < SORTEO_INICIO.getTime() || Date.now() - autoLast < 90000) return;
+  const cur = state.draws[SORTEO];
+  if (cur && cur.updatedBy !== AUTO) return; // no pisa lo que alguien haya escrito a mano
+  autoBusy = true; autoLast = Date.now();
+  try {
+    const o = await fetchOficial();
+    if (o.results && (!cur || resKey(cur.results) !== resKey(o.results))) {
+      state.draws = (await api('PUT', '/api/draws/oficial', { results: o.results })).draws;
+      renderMain(); toast('Resultados oficiales cargados');
+    }
+  } catch { /* sin conexión con la fuente: se reintenta */ } finally { autoBusy = false; }
+}
+
 // refresco periódico para ver lo que apuntan los demás
 setInterval(async () => {
   if (!state.me || document.hidden || document.querySelector('dialog[open]')) return;
   try { await loadData(); renderMain(); } catch (x) { if (x.status === 401) { state.me = null; renderLogin(); } }
 }, 20000);
+setInterval(() => { if (!document.hidden) autoOficial(); }, 30000);
 
 boot();

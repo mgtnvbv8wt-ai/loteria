@@ -219,3 +219,5 @@ dialog[open] { display: flex; flex-direction: column; }
 .sess-set { margin-top: 10px; }
 .sess-set label { display: block; margin-top: 8px; }
 a.btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+
+.oficial { margin-bottom: 10px; }

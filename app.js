@@ -3,7 +3,7 @@ const app = document.getElementById('app');
 const eurInt = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0, useGrouping: 'always' });
 const eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', useGrouping: 'always' });
 
-const state = { me: null, groups: [], tickets: [], draws: {}, view: 'all' };
+const state = { me: null, groups: [], tickets: [], settlements: [], draws: {}, view: 'all' };
 const grp = id => state.groups.find(g => g.id === id);
 const namesOf = g => g.personas.map(p => p.name);
 const partsOf = (t, g) => (t.participantes ? t.participantes.split(',').map(x => x.trim()).filter(x => namesOf(g).includes(x)) : []);
@@ -60,6 +60,16 @@ async function api(method, url, body) {
   if (url === '/api/groups') return rpc('lot_create_group', { p_token: TOKEN, p_name: body.name, p_my_persona: body.persona, p_personas: body.others || '' });
   if (url === '/api/groups/join') return rpc('lot_join_group', { p_token: TOKEN, p_code: body.code, p_persona: body.persona });
   if (url === '/api/groups/persona') return rpc('lot_add_persona', { p_token: TOKEN, p_group: body.group, p_name: body.name });
+  if (url === '/api/history') return rpc('lot_history', { p_token: TOKEN });
+  if (url === '/api/password') return rpc('lot_change_password', { p_token: TOKEN, p_old: body.old, p_new: body.new });
+  if (url === '/api/groups/leave') return rpc('lot_leave_group', { p_token: TOKEN, p_group: body.group });
+  if (url === '/api/groups/rename') return rpc('lot_rename_group', { p_token: TOKEN, p_group: body.group, p_name: body.name });
+  if (url === '/api/groups/regen') return rpc('lot_regen_code', { p_token: TOKEN, p_group: body.group });
+  if (url === '/api/groups/me') return rpc('lot_rename_persona', { p_token: TOKEN, p_group: body.group, p_new: body.name });
+  if (url === '/api/settlements' && method === 'POST') return rpc('lot_add_settlement', { p_token: TOKEN, p_group: body.group, p_from: body.from, p_to: body.to, p_amount: body.amount });
+  if (url === '/api/draws/restore') return rpc('lot_restore_draw', { p_token: TOKEN, p_log_id: body.id });
+  if ((m = url.match(/^\/api\/settlements\/([\w-]+)$/)) && method === 'DELETE') return rpc('lot_delete_settlement', { p_token: TOKEN, p_id: m[1] });
+  if ((m = url.match(/^\/api\/tickets\/([\w-]+)\/restore$/)) && method === 'POST') return rpc('lot_restore_ticket', { p_token: TOKEN, p_id: m[1] });
   if (url === '/api/logout') { const t = TOKEN; setToken(''); try { await rpc('lot_logout', { p_token: t }); } catch { /* */ } return { ok: true }; }
   if (url === '/api/tickets' && method === 'POST') return rpc('lot_save_ticket', { p_token: TOKEN, p_id: null, p_ticket: body });
   if ((m = url.match(/^\/api\/tickets\/([\w-]+)$/))) {
@@ -78,6 +88,7 @@ function toast(msg) {
 }
 const fmtDate = d => new Date(d + 'T12:00:00').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 const pad = n => String(n).padStart(2, '0');
+const fmtWhen = ms => new Date(ms).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 const isoDate = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
 // ---------- premios ----------
@@ -117,7 +128,7 @@ function prizesFor(t) {
 // ---------- carga ----------
 async function loadData() {
   const d = await api('GET', '/api/data');
-  state.groups = d.groups; state.tickets = d.tickets; state.draws = d.draws;
+  state.groups = d.groups; state.tickets = d.tickets; state.draws = d.draws; state.settlements = d.settlements || [];
 }
 async function boot() {
   try {
@@ -215,13 +226,16 @@ function renderMain() {
   app.replaceChildren(
     h('div', { class: 'topbar' },
       h('div', { class: 'brand' }, 'Decims i Numeros', h('small', {}, 'Lotería de Mafriges')),
-      h('div', { class: 'who' }, h('span', {}, '👤 ' + state.me.username),
-        h('button', { class: 'link', onclick: async () => { await api('POST', '/api/logout', {}); state.me = null; state.groups = []; state.tickets = []; renderLogin(); } }, 'Salir'))),
+      h('div', { class: 'who' }, h('button', { class: 'link', onclick: accountDialog }, '👤 ' + state.me.username),
+        h('button', { class: 'link', onclick: logout }, 'Salir'))),
     h('div', { class: 'wrap' },
+      countdown(),
       h('div', { class: 'toolbar' },
         h('button', { class: 'btn gold', onclick: () => ticketDialog() }, '+ Apuntar número'),
         h('button', { class: 'btn ghost', onclick: () => resultsDialog() }, '🏆 Resultados'),
-        h('button', { class: 'btn ghost', onclick: () => sesionesDialog() }, '🗂 Sesiones')),
+        h('button', { class: 'btn ghost', onclick: () => sesionesDialog() }, '🗂 Sesiones'),
+        h('button', { class: 'btn ghost', onclick: () => historyDialog() }, '🕘 Historial'),
+        h('button', { class: 'btn ghost', onclick: () => shareDialog() }, '📤 Compartir')),
       tabs,
       ...blocks,
       list.length ? h('div', { class: 'summary' },
@@ -260,7 +274,7 @@ function personsBlock(list, g) {
     sinAsignar ? h('p', { class: 'hint', style: 'margin:-8px 0 14px' }, sinAsignar + (sinAsignar === 1 ? ' número sin participantes asignados' : ' números sin participantes asignados') + ' (no se cuentan arriba).') : null);
 }
 
-function cuentasBlock(list, g) {
+function calcCuentas(list, g) {
   const net = Object.fromEntries(namesOf(g).map(n => [n, 0]));
   let sinPagador = 0, hay = false;
   for (const t of list) {
@@ -272,27 +286,45 @@ function cuentasBlock(list, g) {
     net[t.pagadoPor] += cost;
     for (const n of ppl) net[n] -= cost / ppl.length;
   }
+  const sets = state.settlements.filter(x => x.groupId === g.id);
+  for (const x of sets) { if (x.from in net) net[x.from] += Number(x.amount); if (x.to in net) net[x.to] -= Number(x.amount); }
   const deb = namesOf(g).filter(n => net[n] < -0.005).map(n => ({ n, v: -net[n] })).sort((a, b) => b.v - a.v);
   const acr = namesOf(g).filter(n => net[n] > 0.005).map(n => ({ n, v: net[n] })).sort((a, b) => b.v - a.v);
   const pays = [];
   let i = 0, j = 0;
   while (i < deb.length && j < acr.length) {
     const x = Math.min(deb[i].v, acr[j].v);
-    if (x > 0.005) pays.push({ de: deb[i].n, a: acr[j].n, v: x });
+    if (x > 0.005) pays.push({ de: deb[i].n, a: acr[j].n, v: Math.round(x * 100) / 100 });
     deb[i].v -= x; acr[j].v -= x;
     if (deb[i].v < 0.005) i++;
     if (acr[j].v < 0.005) j++;
   }
+  return { pays, hay, sinPagador, sets };
+}
+
+function cuentasBlock(list, g) {
+  const { pays, hay, sinPagador, sets } = calcCuentas(list, g);
   const me = g.persona;
   let body;
-  if (!hay) body = h('p', { class: 'hint', style: 'margin:0' }, 'Indica quién ha pagado cada décimo (al editarlo) para ver aquí quién debe dinero.');
+  if (!hay && !sets.length) body = h('p', { class: 'hint', style: 'margin:0' }, 'Indica quién ha pagado cada décimo (al editarlo) para ver aquí quién debe dinero.');
   else if (!pays.length) body = h('p', { style: 'margin:0' }, '✅ Todo en orden: nadie debe dinero a nadie.');
   else body = h('div', {}, pays.map(p => h('div', { class: 'debt' + (p.de === me || p.a === me ? ' me' : '') },
-    h('b', {}, p.de), ' debe ', h('b', { class: 'amt' }, eur.format(Math.round(p.v * 100) / 100)), ' a ', h('b', {}, p.a))));
+    h('span', {}, h('b', {}, p.de), ' debe ', h('b', { class: 'amt' }, eur.format(p.v)), ' a ', h('b', {}, p.a)),
+    h('button', { class: 'btn small ghost', type: 'button', onclick: async () => {
+      if (!await confirmBox('Marcar como pagado', `${p.de} ha pagado ${eur.format(p.v)} a ${p.a}.`, 'Marcar pagado')) return;
+      try { await api('POST', '/api/settlements', { group: g.id, from: p.de, to: p.a, amount: p.v }); await loadData(); renderMain(); toast('Pago registrado'); }
+      catch (x) { toast(x.message); }
+    } }, 'Marcar pagado'))));
   return h('div', { class: 'cuentas' },
     h('div', { class: 'cuentas-h' }, '💶 Cuentas'),
     body,
-    sinPagador ? h('p', { class: 'hint', style: 'margin:6px 0 0' }, sinPagador + (sinPagador === 1 ? ' décimo sin pagador indicado' : ' décimos sin pagador indicado') + ' (no se cuentan).') : null);
+    sinPagador ? h('p', { class: 'hint', style: 'margin:6px 0 0' }, sinPagador + (sinPagador === 1 ? ' décimo sin pagador indicado' : ' décimos sin pagador indicado') + ' (no se cuentan).') : null,
+    sets.length ? h('details', { class: 'paid' }, h('summary', {}, `Pagos registrados (${sets.length})`),
+      sets.slice().reverse().map(x => h('div', { class: 'paid-row' },
+        h('span', {}, `${x.from} pagó ${eur.format(Number(x.amount))} a ${x.to} · ${fmtWhen(x.at)}`),
+        h('button', { class: 'link', type: 'button', onclick: async () => {
+          try { await api('DELETE', '/api/settlements/' + x.id); await loadData(); renderMain(); toast('Pago deshecho'); } catch (e) { toast(e.message); }
+        } }, 'Deshacer')))) : null);
 }
 
 function decimo(t) {
@@ -407,6 +439,12 @@ function sesionesDialog() {
       ...state.groups.map(g => {
         const nm = h('input', { placeholder: 'Añadir nombre', maxlength: 20, 'aria-label': 'Nuevo nombre' });
         const msg = h('div', { class: 'err', role: 'alert' });
+        const gn = h('input', { maxlength: 40, value: g.name, 'aria-label': 'Nombre de la sesión' });
+        const mn = h('input', { maxlength: 20, value: g.persona, 'aria-label': 'Tu nombre en la sesión' });
+        const run = async (fn, ok) => {
+          msg.textContent = '';
+          try { await fn(); await loadData(); renderMain(); draw(); toast(ok); } catch (x) { msg.textContent = x.message; }
+        };
         return h('div', { class: 'sess' },
           h('div', { class: 'sess-h' }, h('b', {}, g.name), h('span', {}, 'Tú: ' + g.persona)),
           h('div', { class: 'sess-code' }, 'Código para invitar: ', h('code', {}, g.code),
@@ -414,11 +452,25 @@ function sesionesDialog() {
               try { await navigator.clipboard.writeText(g.code); toast('Código copiado'); } catch { toast('Copia el código a mano: ' + g.code); }
             } }, 'Copiar')),
           h('div', { class: 'chips' }, g.personas.map(p => h('span', { class: 'chip static' + (p.taken ? '' : ' pend') }, p.name + (p.taken ? '' : ' · sin cuenta')))),
-          h('div', { class: 'sess-add' }, nm, h('button', { class: 'btn small ghost', type: 'button', onclick: async () => {
-            msg.textContent = '';
-            try { await api('POST', '/api/groups/persona', { group: g.id, name: nm.value }); await loadData(); renderMain(); draw(); toast('Nombre añadido'); }
-            catch (x) { msg.textContent = x.message; }
-          } }, 'Añadir')), msg);
+          h('div', { class: 'sess-add' }, nm, h('button', { class: 'btn small ghost', type: 'button', onclick: () =>
+            run(() => api('POST', '/api/groups/persona', { group: g.id, name: nm.value }), 'Nombre añadido') }, 'Añadir')),
+          h('details', { class: 'sess-set' }, h('summary', {}, '⚙️ Ajustes de la sesión'),
+            h('label', {}, 'Nombre de la sesión'),
+            h('div', { class: 'sess-add' }, gn, h('button', { class: 'btn small ghost', type: 'button', onclick: () =>
+              run(() => api('POST', '/api/groups/rename', { group: g.id, name: gn.value }), 'Sesión renombrada') }, 'Guardar')),
+            h('label', {}, 'Tu nombre en esta sesión'),
+            h('div', { class: 'sess-add' }, mn, h('button', { class: 'btn small ghost', type: 'button', onclick: () =>
+              run(() => api('POST', '/api/groups/me', { group: g.id, name: mn.value }), 'Nombre cambiado') }, 'Guardar')),
+            h('div', { class: 'sess-actions' },
+              h('button', { class: 'btn small ghost', type: 'button', onclick: async () => {
+                if (!await confirmBox('Nuevo código', 'El código actual dejará de funcionar. Quien ya está dentro seguirá dentro.', 'Generar código')) return;
+                run(() => api('POST', '/api/groups/regen', { group: g.id }), 'Código nuevo generado');
+              } }, '🔄 Nuevo código'),
+              h('button', { class: 'btn small danger', type: 'button', onclick: async () => {
+                if (!await confirmBox('Salir de la sesión', `Dejarás de ver los números de «${g.name}». Si no queda nadie más, la sesión y sus números se borrarán.`, 'Salir', true)) return;
+                run(async () => { await api('POST', '/api/groups/leave', { group: g.id }); if (state.view === g.id) state.view = 'all'; }, 'Has salido de la sesión');
+              } }, 'Salir de la sesión'))),
+          msg);
       }),
       state.groups.length ? null : h('p', {}, 'Todavía no estás en ninguna sesión.'),
       h('div', { class: 'sess-actions' },
@@ -476,12 +528,12 @@ function createDialog() {
 }
 
 function confirmDelete(t) {
-  openDialog('¿Borrar este número?', h('p', {}, `Se borrará el ${t.numero} para todos los usuarios.`), close => [
+  openDialog('¿Borrar este número?', h('p', {}, `El ${t.numero} se moverá a la papelera para todos los de su sesión. Podrás recuperarlo desde 🕘 Historial.`), close => [
     h('button', { class: 'btn ghost', onclick: close }, 'Cancelar'),
     h('button', { class: 'btn danger', onclick: async () => {
-      try { await api('DELETE', '/api/tickets/' + t.id); await loadData(); close(); renderMain(); toast('Borrado'); }
+      try { await api('DELETE', '/api/tickets/' + t.id); await loadData(); close(); renderMain(); toast('Movido a la papelera'); }
       catch (x) { toast(x.message); }
-    } }, 'Borrar')]);
+    } }, 'Mover a la papelera')]);
 }
 
 // Premios de la Lotería de Navidad 2026, por décimo (importes oficiales)
@@ -496,7 +548,9 @@ const PEDREA = { label: 'Pedrea', euros: 100 };
 const EXTRAS = [['Otro premio', 0]];
 
 function resultsDialog(date = SORTEO) {
-  const saved = state.draws[date] ? state.draws[date].results : [];
+  const cur = state.draws[date] || null;
+  const opened = cur ? cur.updated : null;
+  const saved = cur ? cur.results : [];
   const known = [...FIJOS.map(f => f.label), PEDREA.label, 'Reintegro'];
   const vals = FIJOS.map(f => { const g = saved.find(r => r.label === f.label); return Array.from({ length: f.slots }, (_, i) => (g && g.numeros[i]) || ''); });
   const ped = saved.find(r => r.label === PEDREA.label);
@@ -531,6 +585,8 @@ function resultsDialog(date = SORTEO) {
   drawExtras();
 
   openDialog('Resultados del Sorteo de Navidad', [
+    cur ? h('p', { class: 'hint', style: 'margin-bottom:8px' }, `Última modificación: ${cur.updatedBy}, ${fmtWhen(cur.updated)}. `,
+      h('button', { class: 'link', type: 'button', onclick: () => historyDialog() }, 'Ver cambios y restaurar')) : null,
     h('p', { class: 'hint' }, 'Escribe solo los números premiados: los importes ya están puestos. El reintegro, las aproximaciones, las centenas y las terminaciones se calculan solos a partir de estos números.'),
     ...fixedRows,
     h('div', { class: 'fx' }, h('div', { class: 'fx-h' }, h('b', {}, 'Pedrea'), h('span', {}, eurInt.format(PEDREA.euros) + ' / décimo')), pedTa, pedCount),
@@ -557,10 +613,156 @@ function resultsDialog(date = SORTEO) {
           results.push({ label: (r.label || 'Premio').trim(), euros: Number(r.euros) || 0, numeros: [r.numero] });
         }
         try {
+          const fresh = (await api('GET', '/api/data')).draws[date] || null;
+          const freshUpd = fresh ? fresh.updated : null;
+          if (freshUpd !== opened) {
+            if (!await confirmBox('Los resultados han cambiado', `${fresh ? fresh.updatedBy : 'Alguien'} los ha modificado mientras los editabas. Si guardas, se sustituirán por lo que ves aquí (se podrá volver atrás desde el Historial).`, 'Sobrescribir', true)) return;
+          } else if (fresh && JSON.stringify(fresh.results) !== JSON.stringify(results)) {
+            if (!await confirmBox('Modificar resultados', `Ya hay resultados guardados por ${fresh.updatedBy} (${fmtWhen(fresh.updated)}). ¿Quieres sustituirlos? Se podrá volver atrás desde el Historial.`, 'Sustituir', true)) return;
+          } else if (fresh) { close(); toast('Sin cambios'); return; }
           state.draws = (await api('PUT', '/api/draws/' + date, { results })).draws;
           close(); renderMain(); toast('Resultados guardados');
         } catch (x) { err.textContent = x.message; }
       } }, 'Guardar y comprobar')]);
+}
+
+// ---------- cuenta, cuenta atrás, confirmaciones ----------
+async function logout() {
+  await api('POST', '/api/logout', {});
+  state.me = null; state.groups = []; state.tickets = []; state.settlements = [];
+  closeAll(); renderLogin();
+}
+
+function confirmBox(title, text, ok = 'Aceptar', danger = false) {
+  return new Promise(res => {
+    let done = false;
+    const dlg = openDialog(title, h('p', {}, text), close => [
+      h('button', { class: 'btn ghost', type: 'button', onclick: close }, 'Cancelar'),
+      h('button', { class: 'btn ' + (danger ? 'danger' : 'gold'), type: 'button', onclick: () => { done = true; close(); } }, ok)]);
+    dlg.addEventListener('close', () => res(done));
+  });
+}
+
+function countdown() {
+  const now = new Date();
+  const days = Math.round((Date.UTC(2026, 11, 22) - Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())) / 864e5);
+  if (days > 0) return h('div', { class: 'countdown' }, '🎄 ', h('b', {}, days), days === 1 ? ' día para el Sorteo de Navidad' : ' días para el Sorteo de Navidad');
+  if (days === 0) return h('div', { class: 'countdown hoy' }, '🎄 ¡Hoy es el Sorteo de Navidad! Suerte a todos');
+  if (!state.draws[SORTEO]) return h('div', { class: 'countdown' }, 'El sorteo ya se celebró. Pulsa «Resultados» para comprobar vuestros números.');
+  return null;
+}
+
+function accountDialog() {
+  const o = h('input', { type: 'password', autocomplete: 'current-password', 'aria-label': 'Contraseña actual' });
+  const n = h('input', { type: 'password', autocomplete: 'new-password', 'aria-label': 'Nueva contraseña' });
+  const r = h('input', { type: 'password', autocomplete: 'new-password', 'aria-label': 'Repite la nueva contraseña' });
+  const err = h('div', { class: 'err', role: 'alert' });
+  openDialog('👤 ' + state.me.username, [
+    h('label', {}, 'Contraseña actual'), o, h('label', {}, 'Nueva contraseña (mínimo 6 caracteres)'), n, h('label', {}, 'Repite la nueva contraseña'), r, err,
+    h('p', { class: 'hint' }, 'Al cambiarla, se cerrará tu sesión en los demás dispositivos.')],
+    close => [
+      h('button', { class: 'btn ghost', type: 'button', onclick: close }, 'Cerrar'),
+      h('button', { class: 'btn gold', type: 'button', onclick: async () => {
+        err.textContent = '';
+        if (n.value.length < 6) { err.textContent = 'La nueva contraseña debe tener al menos 6 caracteres'; return; }
+        if (n.value !== r.value) { err.textContent = 'Las contraseñas nuevas no coinciden'; return; }
+        try { await api('POST', '/api/password', { old: o.value, new: n.value }); close(); toast('Contraseña cambiada'); }
+        catch (x) { err.textContent = x.message; }
+      } }, 'Cambiar contraseña')]);
+}
+
+// ---------- historial y papelera ----------
+const FIELD = { numero: 'Número', decimos: 'Décimos', precio: 'Precio', participantes: 'Con', pagadoPor: 'Pagó', notas: 'Notas', groupId: 'Sesión' };
+function diffText(o, n) {
+  const val = (k, v) => k === 'groupId' ? ((grp(v) || {}).name || '—') : (v === '' || v == null ? '—' : String(v));
+  return Object.keys(FIELD).filter(k => String(o[k] ?? '') !== String(n[k] ?? '')).map(k => `${FIELD[k]}: ${val(k, o[k])} → ${val(k, n[k])}`).join('; ') || 'sin cambios';
+}
+function logLine(e) {
+  const ses = state.groups.length > 1 && grp(e.groupId) ? ` (${grp(e.groupId).name})` : '';
+  if (e.action === 'crear') return `${e.by} apuntó el ${e.new.numero} ×${e.new.decimos}${ses}`;
+  if (e.action === 'borrar') return `${e.by} borró el ${e.old.numero}${ses}`;
+  if (e.action === 'restaurar') return `${e.by} restauró el ${e.new.numero}${ses}`;
+  return `${e.by} editó el ${e.new.numero}${ses}: ${diffText(e.old, e.new)}`;
+}
+async function historyDialog() {
+  const body = h('div', {}, h('p', { class: 'hint' }, 'Cargando…'));
+  openDialog('🕘 Historial', body, close => [h('button', { class: 'btn ghost', type: 'button', onclick: close }, 'Cerrar')]);
+  async function load() {
+    let d;
+    try { d = await api('GET', '/api/history'); } catch (x) { body.replaceChildren(h('p', { class: 'err' }, x.message)); return; }
+    const after = async (fn, ok) => { try { await fn(); await loadData(); renderMain(); toast(ok); await load(); } catch (x) { toast(x.message); } };
+    body.replaceChildren(...[
+      h('div', { class: 'cuentas-h' }, '🗑 Papelera'),
+      d.trash.length ? d.trash.map(t => h('div', { class: 'hist-row' },
+        h('span', {}, h('b', {}, t.numero), ` ×${t.decimos} · borrado por ${t.deletedBy}, ${fmtWhen(t.deletedAt)}` + (state.groups.length > 1 && grp(t.groupId) ? ` · ${grp(t.groupId).name}` : '')),
+        h('button', { class: 'btn small ghost', type: 'button', onclick: () => after(() => api('POST', `/api/tickets/${t.id}/restore`, {}), 'Número restaurado') }, 'Restaurar')))
+        : h('p', { class: 'hint' }, 'La papelera está vacía.'),
+      h('div', { class: 'cuentas-h', style: 'margin-top:14px' }, '🏆 Cambios en los resultados'),
+      d.drawLog.length ? d.drawLog.map(l => h('div', { class: 'hist-row' },
+        h('span', {}, `${l.by} · ${fmtWhen(l.at)}`),
+        h('button', { class: 'btn small ghost', type: 'button', onclick: async () => {
+          if (!await confirmBox('Restaurar resultados', l.hadOld ? 'Los resultados volverán a como estaban justo antes de este cambio.' : 'Se quitarán los resultados que se guardaron en este cambio.', 'Restaurar', true)) return;
+          after(async () => { state.draws = (await api('POST', '/api/draws/restore', { id: l.id })).draws; }, 'Resultados restaurados');
+        } }, l.hadOld ? 'Volver a la anterior' : 'Quitar')))
+        : h('p', { class: 'hint' }, 'Todavía nadie ha guardado resultados.'),
+      h('div', { class: 'cuentas-h', style: 'margin-top:14px' }, '📝 Últimos cambios en números'),
+      d.log.length ? d.log.map(e => h('div', { class: 'hist-row' }, h('span', {}, logLine(e), h('small', {}, ' · ' + fmtWhen(e.at)))))
+        : h('p', { class: 'hint' }, 'Sin cambios todavía.')].flat().filter(Boolean));
+  }
+  load();
+}
+
+// ---------- compartir y exportar ----------
+function visibleGroups() { return state.view === 'all' ? state.groups : [grp(state.view)].filter(Boolean); }
+function summaryText() {
+  const parts = visibleGroups().map(g => {
+    const list = state.tickets.filter(t => t.groupId === g.id).sort((a, b) => a.numero.localeCompare(b.numero));
+    if (!list.length) return null;
+    const lines = [`🎄 ${g.name} · Lotería de Navidad`];
+    for (const t of list) {
+      const p = prizesFor(t), ppl = partsOf(t, g);
+      lines.push(`• ${t.numero} ×${t.decimos}${ppl.length ? ' (' + ppl.join(', ') + ')' : ''}${p ? (p.total > 0 ? ' → ' + eur.format(p.total) : ' → sin premio') : ''}`);
+    }
+    const inv = list.reduce((x, t) => x + t.precio * t.decimos, 0);
+    let won = 0, drawn = false;
+    for (const t of list) { const p = prizesFor(t); if (p) { drawn = true; won += p.total; } }
+    lines.push(`Jugado: ${eur.format(inv)}` + (drawn ? ` · Premios: ${eur.format(won)}` : ''));
+    const c = calcCuentas(list, g);
+    if (c.pays.length) { lines.push('💶 Cuentas pendientes:'); for (const x of c.pays) lines.push(`• ${x.de} debe ${eur.format(x.v)} a ${x.a}`); }
+    else if (c.hay || c.sets.length) lines.push('✅ Cuentas al día');
+    return lines.join('\n');
+  }).filter(Boolean);
+  return parts.length ? parts.join('\n\n') : 'Todavía no hay números apuntados.';
+}
+function csvText() {
+  const q = v => { let x = String(v ?? ''); if (/^[=+\-@]/.test(x)) x = "'" + x; return '"' + x.replace(/"/g, '""') + '"'; };
+  const num = v => String(Math.round(v * 100) / 100).replace('.', ',');
+  const rows = [['Sesión', 'Número', 'Décimos', 'Precio décimo', 'Total', 'Participantes', 'Pagó', 'Premio', 'Notas', 'Apuntado por'].map(q).join(';')];
+  for (const g of visibleGroups()) {
+    for (const t of state.tickets.filter(t => t.groupId === g.id).sort((a, b) => a.numero.localeCompare(b.numero))) {
+      const p = prizesFor(t);
+      rows.push([q(g.name), '="' + t.numero + '"', t.decimos, num(t.precio), num(t.precio * t.decimos), q(t.participantes), q(t.pagadoPor || ''),
+        p ? num(p.total) : '', q(t.notas), q(t.createdBy)].join(';'));
+    }
+  }
+  return '﻿' + rows.join('\r\n');
+}
+function shareDialog() {
+  const text = summaryText();
+  const ta = h('textarea', { rows: 12, readonly: true, 'aria-label': 'Resumen', style: 'font-size:.85rem' });
+  ta.value = text;
+  openDialog('📤 Compartir resumen', [ta,
+    h('div', { class: 'sess-actions' },
+      h('button', { class: 'btn ghost', type: 'button', onclick: async () => {
+        try { await navigator.clipboard.writeText(text); toast('Resumen copiado'); } catch { ta.select(); toast('Selecciona y copia el texto'); }
+      } }, 'Copiar'),
+      h('a', { class: 'btn gold', href: 'https://wa.me/?text=' + encodeURIComponent(text), target: '_blank', rel: 'noopener' }, 'WhatsApp'),
+      h('button', { class: 'btn ghost', type: 'button', onclick: () => {
+        const url = URL.createObjectURL(new Blob([csvText()], { type: 'text/csv;charset=utf-8' }));
+        const a = h('a', { href: url, download: 'decims-i-numeros.csv' });
+        document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 4000);
+      } }, '⬇️ CSV (Excel)'))],
+    close => [h('button', { class: 'btn ghost', type: 'button', onclick: close }, 'Cerrar')]);
 }
 
 // refresco periódico para ver lo que apuntan los demás

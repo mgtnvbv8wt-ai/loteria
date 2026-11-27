@@ -189,7 +189,7 @@ dialog[open] { display: flex; flex-direction: column; }
 
 .cuentas { background: var(--paper); border: 1px solid #cdbf93; border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; font-size: .9rem; }
 .cuentas-h { font-family: var(--serif); font-weight: 700; color: var(--green); margin-bottom: 6px; }
-.debt { padding: 4px 0; }
+.debt { padding: 4px 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .debt.me { background: rgba(231,195,90,.28); border-radius: 6px; padding: 4px 6px; margin: 2px -6px; }
 .debt .amt { color: #8a6a00; }
 
@@ -208,3 +208,14 @@ dialog[open] { display: flex; flex-direction: column; }
 .sess-actions .btn { flex: 1 1 auto; }
 .chip.static { cursor: default; display: inline-block; }
 .chip.pend { border-style: dashed; opacity: .75; }
+
+.countdown { background: var(--green); color: #fff; border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; text-align: center; font-size: .95rem; }
+.countdown b { color: var(--gold); font-size: 1.25rem; }
+.countdown.hoy { background: var(--gold); color: #4a0b0c; font-weight: 700; }
+.paid { margin-top: 8px; font-size: .8rem; color: #4d4730; }
+.paid summary, .sess-set summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.paid-row, .hist-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px dashed #d8cca3; font-size: .85rem; }
+.hist-row small { color: #6b6244; }
+.sess-set { margin-top: 10px; }
+.sess-set label { display: block; margin-top: 8px; }
+a.btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }

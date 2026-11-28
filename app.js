@@ -230,15 +230,15 @@ function renderMain() {
     h('div', { class: 'topbar' },
       h('div', { class: 'brand' }, 'Decims i Numeros', h('small', {}, 'Lotería de Mafriges')),
       h('div', { class: 'who' }, h('button', { class: 'link', onclick: accountDialog }, '👤 ' + state.me.username),
-        h('button', { class: 'link', onclick: logout }, 'Salir'))),
+        h('button', { class: 'burger', type: 'button', 'aria-label': 'Menú', 'aria-haspopup': 'true', onclick: e => { e.stopPropagation(); document.querySelector('.menu').classList.toggle('open'); } }, '☰'),
+        h('div', { class: 'menu', role: 'menu' }, [
+          ['🏆 Resultados', () => resultsDialog()], ['🗂 Sesiones', () => sesionesDialog()], ['🕘 Historial', () => historyDialog()],
+          ['📤 Compartir', () => shareDialog()], ['👤 Mi cuenta', accountDialog], ['Salir', logout]
+        ].map(([label, fn]) => h('button', { type: 'button', role: 'menuitem', onclick: () => { document.querySelector('.menu').classList.remove('open'); fn(); } }, label))))),
     h('div', { class: 'wrap' },
       countdown(),
       h('div', { class: 'toolbar' },
-        h('button', { class: 'btn gold', onclick: () => ticketDialog() }, '+ Apuntar número'),
-        h('button', { class: 'btn ghost', onclick: () => resultsDialog() }, '🏆 Resultados'),
-        h('button', { class: 'btn ghost', onclick: () => sesionesDialog() }, '🗂 Sesiones'),
-        h('button', { class: 'btn ghost', onclick: () => historyDialog() }, '🕘 Historial'),
-        h('button', { class: 'btn ghost', onclick: () => shareDialog() }, '📤 Compartir')),
+        h('button', { class: 'btn gold', onclick: () => ticketDialog() }, '+ Apuntar número')),
       tabs,
       blocks.length ? h('details', { class: 'fold', open: state.fold, ontoggle: e => { state.fold = e.currentTarget.open; try { localStorage.setItem('lot_fold', state.fold ? '1' : '0'); } catch { /* */ } } },
         h('summary', {}, '💶 Cuentas y personas'), ...blocks) : null,
@@ -836,9 +836,10 @@ async function autoOficial() {
 
 // refresco periódico para ver lo que apuntan los demás
 setInterval(async () => {
-  if (!state.me || document.hidden || document.querySelector('dialog[open]')) return;
+  if (!state.me || document.hidden || document.querySelector('dialog[open], .menu.open')) return;
   try { await loadData(); renderMain(); } catch (x) { if (x.status === 401) { state.me = null; renderLogin(); } }
 }, 20000);
 setInterval(() => { if (!document.hidden) autoOficial(); }, 30000);
 
+document.addEventListener('click', () => { const m = document.querySelector('.menu.open'); if (m) m.classList.remove('open'); });
 boot();

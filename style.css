@@ -228,3 +228,11 @@ a.btn { display: inline-flex; align-items: center; justify-content: center; text
 .fold > summary::after { content: '▾'; float: right; transition: transform .15s; }
 .fold:not([open]) > summary::after { transform: rotate(-90deg); }
 .fold[open] > summary { margin-bottom: 12px; }
+
+.who { position: relative; }
+.burger { background: rgba(255,255,255,.14); border: 1px solid rgba(231,195,90,.6); color: var(--gold); border-radius: 8px; font-size: 1.25rem; line-height: 1; padding: 6px 10px; }
+.menu { display: none; position: absolute; right: 0; top: calc(100% + 10px); z-index: 20; min-width: 190px; background: var(--paper); border: 1px solid #cdbf93; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.3); padding: 6px; flex-direction: column; }
+.menu.open { display: flex; }
+.menu button { background: none; border: 0; text-align: left; padding: 12px 12px; font-size: 1rem; color: var(--green); border-radius: 6px; }
+.menu button:active { background: rgba(130,20,22,.1); }
+.menu button:last-child { border-top: 1px solid #d8cca3; border-radius: 0 0 6px 6px; }

@@ -221,3 +221,10 @@ dialog[open] { display: flex; flex-direction: column; }
 a.btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 
 .oficial { margin-bottom: 10px; }
+
+.fold { margin-bottom: 14px; }
+.fold > summary { cursor: pointer; list-style: none; background: var(--paper); border: 1px solid #cdbf93; border-radius: 8px; padding: 10px 12px; font-family: var(--serif); font-weight: 700; color: var(--green); }
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary::after { content: '▾'; float: right; transition: transform .15s; }
+.fold:not([open]) > summary::after { transform: rotate(-90deg); }
+.fold[open] > summary { margin-bottom: 12px; }

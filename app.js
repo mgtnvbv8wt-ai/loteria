@@ -3,7 +3,8 @@ const app = document.getElementById('app');
 const eurInt = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0, useGrouping: 'always' });
 const eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', useGrouping: 'always' });
 
-const state = { me: null, groups: [], tickets: [], settlements: [], draws: {}, view: 'all' };
+const state = { me: null, groups: [], tickets: [], settlements: [], draws: {}, view: 'all', fold: false };
+try { state.fold = localStorage.getItem('lot_fold') === '1'; } catch { /* */ }
 const grp = id => state.groups.find(g => g.id === id);
 const namesOf = g => g.personas.map(p => p.name);
 const partsOf = (t, g) => (t.participantes ? t.participantes.split(',').map(x => x.trim()).filter(x => namesOf(g).includes(x)) : []);
@@ -239,7 +240,8 @@ function renderMain() {
         h('button', { class: 'btn ghost', onclick: () => historyDialog() }, '🕘 Historial'),
         h('button', { class: 'btn ghost', onclick: () => shareDialog() }, '📤 Compartir')),
       tabs,
-      ...blocks,
+      blocks.length ? h('details', { class: 'fold', open: state.fold, ontoggle: e => { state.fold = e.currentTarget.open; try { localStorage.setItem('lot_fold', state.fold ? '1' : '0'); } catch { /* */ } } },
+        h('summary', {}, '💶 Cuentas y personas'), ...blocks) : null,
       list.length ? h('div', { class: 'summary' },
         h('div', {}, h('b', {}, list.reduce((s, t) => s + t.decimos, 0)), h('span', {}, 'Décimos')),
         h('div', {}, h('b', {}, eur.format(invested)), h('span', {}, 'Jugado')),

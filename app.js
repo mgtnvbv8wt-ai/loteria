@@ -3,8 +3,7 @@ const app = document.getElementById('app');
 const eurInt = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0, useGrouping: 'always' });
 const eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', useGrouping: 'always' });
 
-const state = { me: null, groups: [], tickets: [], settlements: [], draws: {}, view: 'all', fold: false };
-try { state.fold = localStorage.getItem('lot_fold') === '1'; } catch { /* */ }
+const state = { me: null, groups: [], tickets: [], settlements: [], draws: {}, view: 'all' };
 const grp = id => state.groups.find(g => g.id === id);
 const namesOf = g => g.personas.map(p => p.name);
 const partsOf = (t, g) => (t.participantes ? t.participantes.split(',').map(x => x.trim()).filter(x => namesOf(g).includes(x)) : []);
@@ -218,11 +217,6 @@ function renderMain() {
     invested += t.precio * t.decimos;
     const p = prizesFor(t); if (p) won += p.total;
   }
-  const sections = (state.view === 'all' ? gs : [grp(state.view)]).filter(g => list.some(t => t.groupId === g.id));
-  const blocks = sections.map(g => {
-    const gl = list.filter(t => t.groupId === g.id);
-    return h('div', {}, sections.length > 1 ? h('div', { class: 'gname' }, '🗂 ' + g.name) : null, personsBlock(gl, g), cuentasBlock(gl, g));
-  });
   const tabs = gs.length > 1 ? h('div', { class: 'chips gtabs' }, [['all', 'Todas'], ...gs.map(g => [g.id, g.name])].map(([id, label]) =>
     h('button', { type: 'button', class: 'chip pchip' + (state.view === id ? ' on' : ''), onclick: () => { state.view = id; renderMain(); } }, label))) : null;
 
@@ -232,7 +226,7 @@ function renderMain() {
       h('div', { class: 'who' }, h('button', { class: 'link', onclick: accountDialog }, '👤 ' + state.me.username),
         h('button', { class: 'burger', type: 'button', 'aria-label': 'Menú', 'aria-haspopup': 'true', onclick: e => { e.stopPropagation(); document.querySelector('.menu').classList.toggle('open'); } }, '☰'),
         h('div', { class: 'menu', role: 'menu' }, [
-          ['🏆 Resultados', () => resultsDialog()], ['🗂 Sesiones', () => sesionesDialog()], ['🕘 Historial', () => historyDialog()],
+          ['💶 Cuentas y personas', cuentasDialog], ['🏆 Resultados', () => resultsDialog()], ['🗂 Sesiones', () => sesionesDialog()], ['🕘 Historial', () => historyDialog()],
           ['📤 Compartir', () => shareDialog()], ['👤 Mi cuenta', accountDialog], ['Salir', logout]
         ].map(([label, fn]) => h('button', { type: 'button', role: 'menuitem', onclick: () => { document.querySelector('.menu').classList.remove('open'); fn(); } }, label))))),
     h('div', { class: 'wrap' },
@@ -240,8 +234,6 @@ function renderMain() {
       h('div', { class: 'toolbar' },
         h('button', { class: 'btn gold', onclick: () => ticketDialog() }, '+ Apuntar número')),
       tabs,
-      blocks.length ? h('details', { class: 'fold', open: state.fold, ontoggle: e => { state.fold = e.currentTarget.open; try { localStorage.setItem('lot_fold', state.fold ? '1' : '0'); } catch { /* */ } } },
-        h('summary', {}, '💶 Cuentas y personas'), ...blocks) : null,
       list.length ? h('div', { class: 'summary' },
         h('div', {}, h('b', {}, list.reduce((s, t) => s + t.decimos, 0)), h('span', {}, 'Décimos')),
         h('div', {}, h('b', {}, eur.format(invested)), h('span', {}, 'Jugado')),
@@ -251,8 +243,22 @@ function renderMain() {
             h('br'), gs.length ? 'Pulsa «Apuntar número» para empezar.' : 'Pulsa «Sesiones» para crear una o unirte con un código.'),
       h('p', { class: 'hint', style: 'text-align:center;margin-top:24px' },
         'Los premios se calculan con los resultados que se introducen a mano. Compruébalos siempre con el resultado oficial de Loterías y Apuestas del Estado.')));
+  const cb = document.getElementById('cuentas-body');
+  if (cb) cb.replaceChildren(...cuentasBlocks());
 }
 
+function cuentasBlocks() {
+  const gs = state.view === 'all' ? state.groups : [grp(state.view)].filter(Boolean);
+  const sections = gs.filter(g => state.tickets.some(t => t.groupId === g.id));
+  if (!sections.length) return [h('p', { class: 'hint' }, 'Todavía no hay números apuntados.')];
+  return sections.map(g => {
+    const gl = state.tickets.filter(t => t.groupId === g.id);
+    return h('div', {}, sections.length > 1 ? h('div', { class: 'gname' }, '🗂 ' + g.name) : null, personsBlock(gl, g), cuentasBlock(gl, g));
+  });
+}
+function cuentasDialog() {
+  openDialog('💶 Cuentas y personas', h('div', { id: 'cuentas-body' }, cuentasBlocks()), close => [h('button', { class: 'btn ghost', type: 'button', onclick: close }, 'Cerrar')]);
+}
 const fmtN = n => n.toLocaleString('es-ES', { maximumFractionDigits: 2 });
 function personsBlock(list, g) {
   const per = namesOf(g).map(n => ({ n, cost: 0, dec: 0, prize: 0 }));
